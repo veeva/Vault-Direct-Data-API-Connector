@@ -1,0 +1,88 @@
+{
+	"info": {
+		"_postman_id": "c661cc05-c23f-41ac-8c2e-bb00111b6f45",
+		"name": "Public Direct Data Lambda API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "8181720"
+	},
+	"item": [
+		{
+			"name": "01 - List and Download Direct Data Files to S3",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"step\": \"retrieve\", //This command is to invoke the listing and downloading of Direct Data files\n    \"start_time\": \"2000-01-01T00:00Z\", //This is start of the time window for the specific direct data file\n    \"stop_time\": \"2024-03-11T00:00Z\", //This is stop of the time window for the specific direct data file\n    \"extract_type\": \"full\", //This is the type of Direct Data file to be retrieved. The options are full, incremental or log\n    \"continue_processing\": false //This determines if you want to perform the full extraction process or stop afte this specific step has been completed.\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{api_url}}",
+					"host": [
+						"{{api_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "03-Unzip Files in S3",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"step\": \"unzip\", //This denotes that the unzip step will be performed\n    \"source_file\": \"direct-data/168629-20240307-0845-N.tar.gz\", //This is the full path in S3 of the file that needs to be unzipped\n    \"target_directory\": \"direct-data/168629-20240307-0845-N\", //This is the output directory of where the unzipped contents will be placed\n    \"extract_type\": \"incremental\", //This is the type of Direct Data file that is being handled. The options are full, log, or incremental\n    \"continue_processing\": false //This determines if you want to perform the full extraction process or stop afte this specific step has been completed.\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{api_url}}",
+					"host": [
+						"{{api_url}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "04-Load Direct Data",
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"step\": \"load_data\",\n    \"source_file\": \"direct-data/168629-20240307-0845-N\", //This is the directory of where Direct Data that is going to be loaded exists\n    \"extract_type\": \"incremental\" //This is the type of Direct Data file that is being handled. The options are full, log, or incremental\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{api_url}}",
+					"host": [
+						"{{api_url}}"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
