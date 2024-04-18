@@ -6,6 +6,7 @@
 [Direct Data API](https://developer.veevavault.com/directdata) allows Veeva customers to replicate their data in external data warehouses and/or data lakes. 
 
 ##Overview
+
 ![Direct Data Connector Diagram](https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/2e30807073334e9da71cf4331263935c09ad86af/Direct%20Data%20API%20Connector.png)
 
 This project is a customer connector between Vault and AWS Redshift. This connector performs the following:
