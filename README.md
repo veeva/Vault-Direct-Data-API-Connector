@@ -5,7 +5,7 @@
 ## Introduction
 [Direct Data API](https://developer.veevavault.com/directdata) allows Veeva customers to replicate their data in external data warehouses and/or data lakes. 
 
-##Overview
+## Overview
 
 ![Direct Data Connector Diagram](https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/2e30807073334e9da71cf4331263935c09ad86af/Direct%20Data%20API%20Connector.png)
 
@@ -153,11 +153,11 @@ Note: All resources should be created in the same AWS Region.
 * Open the _List and Download Direct Data Files to S3_ endpoint
 * Update the URL to the previously noted `API endpoint` from the lambda trigger 
 
-###Troubleshooting
+### Troubleshooting
 
 If errors are encountered, logs for the Lambda function can be located on CloudWatch whereas the AWS Batch job logging can be located within a previously provisioned job. 
 
-##Support
+## Support
 
 Questions, enhancement requests, or issues should be posted in the [Vault for Developers](https://veevaconnect.com/communities/ATeJ3k8lgAA/posts) community on Veeva Connect. 
 Partners should discuss these topics with their Veeva counterparts. 
