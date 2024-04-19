@@ -9,7 +9,7 @@
 
 ![Direct Data Connector Diagram](https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/2e30807073334e9da71cf4331263935c09ad86af/Direct%20Data%20API%20Connector.png)
 
-This project is a custom connector between Vault and AWS Redshift. This solution performs the following:
+This project is a custom connector between Vault and AWS Redshift. This connector performs the following:
 1. List and download Direct Data files from Vault using Direct Data API
 2. Place Direct Data files to an S3 bucket
 3. Load Direct Data into an AWS Redshift database
@@ -81,7 +81,7 @@ Note: All resources should be created in the same AWS Region.
 * All other settings are default. Click through to create the role
 
 ### Cloudformation Stack
-* Download the [*Direct Data Cloudformation Template*](https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/f56075ceebeda94d4867dfa41c22a1c15f95ad34/CloudFormationDirectDataTemplateLatest.yaml)
+* Download the <a href="https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/f56075ceebeda94d4867dfa41c22a1c15f95ad34/CloudFormationDirectDataTemplateLatest.yaml" download>Direct Data Cloudformation Template</a>
 * Navigate to the Cloudformation service in the AWS Console
 * Select `Create Stack` and `With new resources (standard)`
 * Configure the Stack with the following settings:
@@ -147,17 +147,76 @@ Note: All resources should be created in the same AWS Region.
   * Target: `Internet Gateway` (Select the gateway associated with the VPC)
 * Save the route table
 
-### Invoke
-* Download the [*Direct Data Connector Postman Collection*](https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/f56075ceebeda94d4867dfa41c22a1c15f95ad34/Public%20Direct%20Data%20Lambda%20API.postman_collection.json)
+### Initial Full Extract Invocation
+* Download the <a href="https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/f56075ceebeda94d4867dfa41c22a1c15f95ad34/Public%20Direct%20Data%20Lambda%20API.postman_collection.json" download>Direct Data Connector Postman Collection</a>
 * Import the collection into Postman
 * Open the _List and Download Direct Data Files to S3_ endpoint
-* Update the URL to the previously noted `API endpoint` from the lambda trigger 
+* Update the URL to the previously noted `API endpoint` from the lambda trigger
+* Update the body parameters with the following JSON payload:
+```json
+{
+  "step": "retrieve", 
+  "start_time": "2000-01-01T00:00Z", 
+  "stop_time": "2024-04-19T00:00Z", //Update this value to the current date
+  "extract_type": "full", 
+  "continue_processing": true 
+  }
+```
+* Click `Send`
+
+* When manually invoking the `full` or `log` extract type process, the **List and Download Direct Data Files to S3** call will respond with the AWS Batch job name `Starting AWS Batch Job with ID: cf-direct-data-retrieve` and **Unzip Files in S3** calls will call will respond with the AWS Batch job name `Starting AWS Batch Job with ID: cf-direct-data-unzip`.
+
+
+### Verify
+Once both AWS Batch jobs have completed, confirm the following: 
+* That the zipped file and the unzipped contents are present in the previously created S3 bucket
+* All the tables were created in the specified Redshift schema and the data was loaded. This can be confirmed using [Redshift Query Editor v2](https://docs.aws.amazon.com/redshift/latest/mgmt/query-editor-v2-using.html).
+
+### Amazon EventBridge
+These schedules should be created after the initial `full` extract is invoked.
+#### Incremental Schedule
+* Navigate to the Amazon EventBridge service in the AWS Console
+* Select `Schedules` from the left under the `Scheduler` section
+* Select `Create schedule`
+* Configure the schedule with the following settings:
+  * _Schedule name_: `direct-data-incremental-schedule`
+  * _Occurrence_: `Recurring schedule`
+  * _Schedule type_: `Rate-based schedule`
+  * _Rate expression_: `15 minutes`
+  * _Flexible time window_: `Off`
+  * _Start date and time_: Insert the target start time for when this schedule should run
+* Select `Next`
+* Configure the next page with the following settings:
+  * _Template targets_: `AWS Lambda Invoke`
+  * _Lambda function_: `cf-direct-data`
+  * _Payload_: 
+```json
+{ 
+  "step": "retrieve", 
+  "extract_type": "incremental", 
+  "continue_processing": true
+}
+```
+* Select `Next`
+* On the next page select `Next`
+* Select `Create schedule`
+
+#### Log Schedule
+* Follow the same steps as the **Incremental Schedule** except changing the following fields:
+  * _Rate expression_: `24 hours`
+  * _Start date and time_: Tomorrow's date at 12 AM
+  * _Payload_: 
+```json
+{ 
+"step": "retrieve", 
+"extract_type": "log", 
+"continue_processing": true
+}
+```
 
 ### Troubleshooting
-
-If errors are encountered, logs for the Lambda function can be located on CloudWatch whereas the AWS Batch job logging can be located within a previously provisioned job. 
+If errors are encountered, the logs for the Lambda function can be located on CloudWatch whereas the AWS Batch job logging can be located within the previous job that ran. 
 
 ## Support
-
 Questions, enhancement requests, or issues should be posted in the [Vault for Developers](https://veevaconnect.com/communities/ATeJ3k8lgAA/posts) community on Veeva Connect. 
 Partners should discuss these topics with their Veeva counterparts. 
