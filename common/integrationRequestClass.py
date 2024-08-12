@@ -24,8 +24,10 @@ class IntegrationRequestClass:
         self.starting_directory = None
         self.direct_data_listing_response = None
         self.target_directory = None
-        self.source_file = None
+        self.source_filepath = None
         self.continue_processing = None
+        self.doc_version_ids = None
+        self.secret = None
 
         # Map data based on event type
         if self.is_api_gateway:
@@ -57,8 +59,10 @@ class IntegrationRequestClass:
         self.starting_directory = self.body.get('starting_directory')
         self.direct_data_listing_response = self.body.get('direct_data_listing_response')
         self.target_directory = self.body.get('target_directory')
-        self.source_file = self.body.get('source_file')
+        self.source_filepath = self.body.get('source_filepath')
         self.continue_processing = self.body.get('continue_processing')
+        self.doc_version_ids = self.body.get('doc_version_ids')
+        self.secret = self.body.get('secret')
         # Map other API Gateway specific data as needed
 
     def map_direct_lambda_data(self):
@@ -67,6 +71,7 @@ class IntegrationRequestClass:
         """
 
         # data = self.event.get('data', {})
+        print(self.event)
         self.step = self.event.get('step')
         self.extract_type = self.event.get('extract_type')
         self.start_time = self.event.get('start_time')
@@ -74,7 +79,53 @@ class IntegrationRequestClass:
         self.starting_directory = self.event.get('starting_directory')
         self.direct_data_listing_response = self.event.get('direct_data_listing_response')
         self.target_directory = self.event.get('target_directory')
-        self.source_file = self.event.get('source_file')
+        self.source_filepath = self.event.get('source_filepath')
         self.continue_processing = self.event.get('continue_processing')
+        self.doc_version_ids = self.event.get('doc_version_ids')
+        self.secret = self.event.get('secret')
 
+    def get_is_api_gateway(self):
+        return self.is_api_gateway
+
+    def get_http_method(self):
+        return self.http_method
+
+    def get_resource(self):
+        return self.resource
+
+    def get_body(self):
+        return self.body
+
+    def get_step(self):
+        return self.step
+
+    def get_extract_type(self):
+        return self.extract_type
+
+    def get_start_time(self):
+        return self.start_time
+
+    def get_stop_time(self):
+        return self.stop_time
+
+    def get_starting_directory(self):
+        return self.starting_directory
+
+    def get_direct_data_listing_response(self):
+        return self.direct_data_listing_response
+
+    def get_target_directory(self):
+        return self.target_directory
+
+    def get_source_filepath(self):
+        return self.source_filepath
+
+    def get_continue_processing(self):
+        return self.continue_processing
+
+    def get_doc_version_ids(self):
+        return self.doc_version_ids
+
+    def get_secret(self):
+        return self.secret
 

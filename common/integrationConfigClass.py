@@ -9,9 +9,10 @@ class IntegrationConfigClass:
     """
     Used to get all the required args from AWS Secrets Manager
     """
-    def __init__(self, region: str):
+    def __init__(self, region: str, secret_name: str):
         self._config = None
         self.region = region
+        self.secret_name = secret_name
     @property
     def config(self):
         """
@@ -30,10 +31,9 @@ class IntegrationConfigClass:
 
         :return: The parsed secrets
         """
-        # Insert the Secret Name of your config file from the AWS secrets manager
-        secret_name = "direct-data-config.ini"
         # Create a Secrets Manager client
         session = boto3.session.Session()
+        secret_name = self.secret_name
         client = session.client(
             service_name='secretsmanager',
             region_name=self.region

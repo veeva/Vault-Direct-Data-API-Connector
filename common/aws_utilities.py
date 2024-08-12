@@ -1,3 +1,5 @@
+import json
+
 import psycopg2
 import boto3
 from .log_message import log_message
@@ -72,8 +74,8 @@ def generate_enviroment_variables(job_parameters):
         environment_variables.append({'name': 'STEP', 'value': job_parameters['step']})
     if 'source_filepath' in job_parameters and job_parameters['source_filepath'] is not None:
         environment_variables.append({'name': 'SOURCE_FILEPATH', 'value': job_parameters['source_filepath']})
-    if 'target_filepath' in job_parameters and job_parameters['target_filepath'] is not None:
-        environment_variables.append({'name': 'TARGET_FILEPATH', 'value': job_parameters['target_filepath']})
+    if 'target_directory' in job_parameters and job_parameters['target_directory'] is not None:
+        environment_variables.append({'name': 'TARGET_DIRECTORY', 'value': job_parameters['target_directory']})
     if 'continue_processing' in job_parameters and job_parameters['continue_processing'] is not None:
         environment_variables.append({'name': 'CONTINUE_PROCESSING', 'value': job_parameters['continue_processing']})
     if 'start_time' in job_parameters and job_parameters['start_time'] is not None:
@@ -82,6 +84,15 @@ def generate_enviroment_variables(job_parameters):
         environment_variables.append({'name': 'STOP_TIME', 'value': job_parameters['stop_time']})
     if 'extract_type' in job_parameters and job_parameters['extract_type'] is not None:
         environment_variables.append({'name': 'EXTRACT_TYPE', 'value': job_parameters['extract_type']})
+    if 'doc_version_ids' in job_parameters and job_parameters['doc_version_ids'] is not None:
+        environment_variables.append({'name': 'DOC_VERSION_IDS', 'value': job_parameters['doc_version_ids']})
+    if 'extract_source_content' in job_parameters and job_parameters['extract_source_content'] is not None:
+        environment_variables.append(
+            {'name': 'EXTRACT_SOURCE_CONTENT', 'value': job_parameters['extract_source_content']})
+    if 'secret_name' in job_parameters and job_parameters['secret_name'] is not None:
+        environment_variables.append({'name': 'SECRET_NAME', 'value': job_parameters['secret_name']})
+    if 'secret' in job_parameters and job_parameters['secret'] is not None:
+        environment_variables.append({'name': 'SECRET', 'value': job_parameters['secret']})
 
     return environment_variables
 
@@ -102,14 +113,22 @@ def generate_command_overrides(job_parameters):
         container_command.extend(["--step", job_parameters['step']])
     if 'source_filepath' in job_parameters and job_parameters['source_filepath'] is not None:
         container_command.extend(["--source_filepath", job_parameters['source_filepath']])
-    if 'target_filepath' in job_parameters and job_parameters['target_filepath'] is not None:
-        container_command.extend(["--target_filepath", job_parameters['target_filepath']])
+    if 'target_directory' in job_parameters and job_parameters['target_directory'] is not None:
+        container_command.extend(["--target_directory", job_parameters['target_directory']])
     if 'continue_processing' in job_parameters and job_parameters['continue_processing'] is not None:
         container_command.extend(["--continue_processing", job_parameters['continue_processing']])
     if 'start_time' in job_parameters and job_parameters['start_time'] is not None:
         container_command.extend(["--start_time", job_parameters['start_time']])
     if 'stop_time' in job_parameters and job_parameters['stop_time'] is not None:
         container_command.extend(["--stop_time", job_parameters['stop_time']])
+    if 'extract_type' in job_parameters and job_parameters['extract_type'] is not None:
+        container_command.extend(["--extract_type", job_parameters['extract_type']])
+    if 'doc_version_ids' in job_parameters and job_parameters['doc_version_ids'] is not None:
+        container_command.extend(["--doc_version_ids", job_parameters['doc_version_ids']])
+    if 'secret_name' in job_parameters and job_parameters['secret_name'] is not None:
+        container_command.extend(["--secret_name", job_parameters['secret_name']])
+    if 'secret' in job_parameters and job_parameters['secret'] is not None:
+        container_command.extend(["--secret", job_parameters['secret']])
 
     return container_command
 
@@ -127,6 +146,153 @@ def get_batch_region():
     else:
         print("No compute environments found.")
         raise Exception("No compute environments found.")
+
+
+def upload_large_file(s3, bucket_name, key, file_content):
+    try:
+        # Initiate multipart upload
+        multipart_upload = s3.create_multipart_upload(Bucket=bucket_name, Key=key)
+        upload_id = multipart_upload['UploadId']
+
+        # Upload parts
+        parts = []
+        part_size = 5 * 1024 * 1024  # 5 MB
+        for i in range(0, len(file_content), part_size):
+            part_num = len(parts) + 1
+            part_data = file_content[i:i + part_size]
+            part = s3.upload_part(
+                Bucket=bucket_name,
+                Key=key,
+                PartNumber=part_num,
+                UploadId=upload_id,
+                Body=part_data
+            )
+            parts.append({'PartNumber': part_num, 'ETag': part['ETag']})
+
+        # Complete multipart upload
+        s3.complete_multipart_upload(
+            Bucket=bucket_name,
+            Key=key,
+            UploadId=upload_id,
+            MultipartUpload={'Parts': parts}
+        )
+    except ClientError as e:
+        s3.abort_multipart_upload(Bucket=bucket_name, Key=key, UploadId=upload_id)
+        log_message(log_level='Error',
+                    message=f'Multipart upload failed',
+                    exception=e,
+                    context=None)
+        raise e
+
+
+def get_s3_path(filename, s3_bucket, subfolder):
+    """
+
+    :param filename: The name of the file to locate
+    :param s3_bucket: The name of the S3 bucket
+    :param subfolder: The directory the file is located
+    :param file_type: full, updates or deletes. Depending on these choices, the file key is searched.
+    :return:
+    """
+    try:
+        s3 = boto3.resource('s3')
+        bucket = s3.Bucket(s3_bucket)
+        prefix = f"{subfolder}/"
+        for obj in bucket.objects.filter(Prefix=prefix):
+            if filename in obj.key:
+                return f"s3://{s3_bucket}/{obj.key}"
+        log_message(log_level='Info',
+                    message=f'For {filename}, s3 file not found',
+                    exception=None, context=None)
+    except Exception as e:
+        raise e
+    return None
+
+
+def retrieve_doc_version_ids_from_s3(file_path: str) -> list[str]:
+    s3 = boto3.client('s3')
+
+    # Check if file_path is a filepath in S3
+    if file_path.startswith("s3://"):
+        # It's an S3 path, so parse the bucket and key
+        s3_path_parts = file_path[5:].split("/", 1)
+        bucket_name = s3_path_parts[0]
+        key = s3_path_parts[1]
+
+        try:
+            # Download the file from S3
+            response = s3.get_object(Bucket=bucket_name, Key=key)
+            file_content = response['Body'].read().decode('utf-8')
+
+            # Attempt to parse the file content as JSON
+            doc_version_ids_list = json.loads(file_content)
+            log_message(log_level='Debug',
+                        message=f'Amount of documents to be extracted in total: {len(doc_version_ids_list)}',
+                        context=None)
+            if isinstance(doc_version_ids_list, list):
+                # Get the first 10,000 document version IDs
+                batch_size = 10000
+                first_batch = doc_version_ids_list[:batch_size]
+                log_message(log_level='Debug',
+                            message=f'Amount of batched documents to be extracted {len(first_batch)}',
+                            context=None)
+                remaining_batch = doc_version_ids_list[batch_size:]
+                log_message(log_level='Debug',
+                            message=f'Amount of remaining documents to be extracted {len(remaining_batch)}',
+                            context=None)
+
+                if remaining_batch:
+                    log_message(log_level='Debug',
+                                message=f'Updating the file: {key}',
+                                context=None)
+                    # If there are remaining IDs, update the file on S3
+                    remaining_content = json.dumps(remaining_batch)
+                    s3.put_object(Bucket=bucket_name, Key=key, Body=remaining_content)
+                else:
+                    log_message(log_level='Debug',
+                                message=f'Deleting the file: {key}',
+                                context=None)
+                    # If no IDs are left, delete the file from S3
+                    s3.delete_object(Bucket=bucket_name, Key=key)
+                    log_message(log_level='Info',
+                                message=f'File {key} deleted successfully',
+                                context=None)
+
+                return first_batch
+            else:
+                raise ValueError("The content is not a valid list of document version IDs")
+        except (s3.exceptions.NoSuchKey, json.JSONDecodeError, ValueError) as e:
+            raise ValueError(f"Error processing S3 file {file_path}: {e}")
+    else:
+        try:
+            # If it's not an S3 path, assume it's a JSON string
+            doc_version_ids_list = json.loads(file_path)
+            if isinstance(doc_version_ids_list, list):
+                return doc_version_ids_list
+            else:
+                raise ValueError("The string is not a valid list of document version IDs")
+        except json.JSONDecodeError:
+            raise ValueError(f"The parameter is neither a valid S3 path nor a valid JSON array: {file_path}")
+
+
+def check_file_exists_s3(bucket_name: str, file_key: str) -> bool:
+    """
+    Check if a file exists in an S3 bucket.
+
+    :param bucket_name: The name of the S3 bucket.
+    :param file_key: The key (path) to the file in the S3 bucket.
+    :return: True if the file exists, False otherwise.
+    """
+    s3 = boto3.client('s3')
+
+    try:
+        s3.head_object(Bucket=bucket_name, Key=file_key)
+        return True
+    except ClientError as e:
+        if e.response['Error']['Code'] == '404':
+            return False
+        else:
+            raise e
 
 
 class RedshiftConnection:

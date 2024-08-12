@@ -65,6 +65,7 @@ Note: All resources should be created in the same AWS Region.
   * Step 1: 
     * _Trusted entity type_: `AWS account`
     * _An AWS account_: `This account`
+    * _Use case_: `Cloudformation`
   * Step 2: Attach the following AWS managed policies. These are required to access Cloudformation and create the direct data resources.
     * AmazonAPIGatewayAdministrator
     * AmazonEC2ContainerRegistryFullAccess
@@ -109,7 +110,8 @@ Note: All resources should be created in the same AWS Region.
 
 ### S3 Bucket
 * Navigate to the S3 service in the AWS Console
-* Search for and select the S3 bucket named `cf-direct-data`
+* Search for and select the S3 bucket named `{ACCOUNT_ID}-{REGION}-cf-direct-data`
+* Copy the s3 bucket name and note it down separately. This will be used in the Direct Data configuration file
 * Create a folder at the root of the bucket named `direct-data`
 
 ### Redshift Cluster
@@ -128,13 +130,15 @@ Note: All resources should be created in the same AWS Region.
 ### Secrets Manager
 * Navigate to the Secrets Manager service in the AWS Console
 * Search for and select the secret named `direct-data-config.ini`
-* Select `Retrieve secret value` then `Edit`. Update the following values:
-  * [vault] username
-  * [vault] password
-  * [vault] dns
-  * [redshift] host (Use the previously copied redshift endpoint. Do not include the port number/database name)
-  * [redshift] iam_redshift_s3_read (Use the previously copied ARN for `cf-direct-data-redshift-role-{REGION}`)
-  * [redshift] password (If updated in the previous step)
+* Select `Retrieve secret value` then `Edit`. Update the following values under the [demo] section:
+  * vault_username
+  * vault_password
+  * vault_dns
+  * redshift_host (Use the previously copied redshift endpoint. Do not include the port number/database name)
+  * redshift_iam_redshift_s3_read (Use the previously copied ARN for `cf-direct-data-redshift-role-{REGION}`)
+  * redshift_password (If updated in the previous step)
+  * s3_bucket_name
+* Additional sections can be added with different vault and/or AWS services specified for multiple Vault and database functionality. 
 
 ### VPC
 * Navigate to the VPC service in the AWS Console
@@ -159,7 +163,8 @@ Note: All resources should be created in the same AWS Region.
   "start_time": "2000-01-01T00:00Z", 
   "stop_time": "2024-04-19T00:00Z", //Update this value to the current date
   "extract_type": "full", 
-  "continue_processing": true 
+  "continue_processing": true,
+  "secret": "demo"
   }
 ```
 * Click `Send`
@@ -194,7 +199,8 @@ These schedules should be created after the initial `full` extract is invoked.
 { 
   "step": "retrieve", 
   "extract_type": "incremental", 
-  "continue_processing": true
+  "continue_processing": true,
+  "secret": "demo"
 }
 ```
 * Select `Next`
@@ -208,9 +214,10 @@ These schedules should be created after the initial `full` extract is invoked.
   * _Payload_: 
 ```json
 { 
-"step": "retrieve", 
-"extract_type": "log", 
-"continue_processing": true
+  "step": "retrieve", 
+  "extract_type": "log", 
+  "continue_processing": true,
+  "secret": "demo"
 }
 ```
 

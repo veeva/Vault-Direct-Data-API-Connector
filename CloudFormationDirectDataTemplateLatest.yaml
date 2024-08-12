@@ -1,454 +1,423 @@
 {
-	"AWSTemplateFormatVersion": "2010-09-09",
-	"Metadata": {
-		"AWS::CloudFormation::Designer": {
-			"9ca5f848-8195-4390-9090-b0ce8302d4d3": {
-				"size": {
-					"width": 140,
-					"height": 140
-				},
-				"position": {
-					"x": 294,
-					"y": 169
-				},
-				"z": 0,
-				"embeds": []
-			},
-			"490f8729-01cc-4bc0-b9c1-c7d4fdcc4a3c": {
-				"size": {
-					"width": 140,
-					"height": 140
-				},
-				"position": {
-					"x": 150,
-					"y": 170
-				},
-				"z": 0,
-				"embeds": []
-			},
-			"cc139752-432c-4a72-a9d3-8c2947da4c3e": {
-				"size": {
-					"width": 60,
-					"height": 60
-				},
-				"position": {
-					"x": 450,
-					"y": 210
-				},
-				"z": 0,
-				"embeds": []
-			},
-			"7fe53bfb-ccf0-4a80-b626-ef1b97de3af8": {
-				"size": {
-					"width": 60,
-					"height": 60
-				},
-				"position": {
-					"x": 60,
-					"y": 200
-				},
-				"z": 0,
-				"embeds": []
-			},
-			"ee43fa17-a878-4ec1-b441-cc44f82af366": {
-				"size": {
-					"width": 60,
-					"height": 60
-				},
-				"position": {
-					"x": 64.94355492876814,
-					"y": 108.01864856583974
-				},
-				"z": 0
-			}
-		}
-	},
-	"Resources": {
-		"CfDirectDataInternetGateway": {
-			"Type": "AWS::EC2::InternetGateway",
-			"Properties": {}
-		},
-		"CfDirectDataVpc": {
-			"Type": "AWS::EC2::VPC",
-			"Properties": {
-				"CidrBlock": "10.0.0.0/16",
-				"EnableDnsSupport": "true",
-				"Tags": [
-					{
-						"Key": "Name",
-						"Value": "cf-direct-data"
-					}
-				]
-			},
-			"Metadata": {
-				"AWS::CloudFormation::Designer": {
-					"id": "9ca5f848-8195-4390-9090-b0ce8302d4d3"
-				}
-			}
-		},
-		"InternetGatewayAttachment": {
-			"Type": "AWS::EC2::VPCGatewayAttachment",
-			"Properties": {
-				"VpcId": {
-					"Ref": "CfDirectDataVpc"
-				},
-				"InternetGatewayId": {
-					"Ref": "CfDirectDataInternetGateway"
-				}
-			}
-		},
-		"CfDirectDataVpcSubnet": {
-			"Type": "AWS::EC2::Subnet",
-			"Properties": {
-				"CidrBlock": "10.0.0.0/24",
-				"VpcId": {
-					"Ref": "CfDirectDataVpc"
-				},
-				"Tags": [
-					{
-						"Key": "Name",
-						"Value": "cf-direct-data"
-					}
-				]
-			},
-			"Metadata": {
-				"AWS::CloudFormation::Designer": {
-					"id": "490f8729-01cc-4bc0-b9c1-c7d4fdcc4a3c"
-				}
-			}
-		},
-		"CfDirectDataSecurityGroup": {
-			"Type": "AWS::EC2::SecurityGroup",
-			"Properties": {
-				"GroupDescription": "Allows traffic to redshift",
-				"GroupName": "cf-direct-data-security-group",
-				"VpcId": {
-					"Ref": "CfDirectDataVpc"
-				},
-				"SecurityGroupIngress": [
-					{
-						"FromPort": 80,
-						"IpProtocol": "tcp",
-						"CidrIp": "0.0.0.0/0",
-						"ToPort": 80
-					},
-					{
-						"FromPort": 5439,
-						"IpProtocol": "tcp",
-						"CidrIp": "0.0.0.0/0",
-						"ToPort": 5439
-					}
-				]
-			}
-		},
-		"CfDirectDataS3": {
-			"Type": "AWS::S3::Bucket",
-			"Properties": {
-				"BucketName": "cf-direct-data"
-			},
-			"Metadata": {
-				"AWS::CloudFormation::Designer": {
-					"id": "cc139752-432c-4a72-a9d3-8c2947da4c3e"
-				}
-			}
-		},
-		"CfDirectDataLambdaExecutionRole": {
-			"Type": "AWS::IAM::Role",
-			"Properties": {
-				"RoleName": {
-					"Fn::Join": [
-						"-",
-						[
-							"cf-direct-data-lambda-execution-role",
-							{
-								"Ref": "AWS::Region"
-							}
-						]
-					]
-				},
-				"AssumeRolePolicyDocument": {
-					"Version": "2012-10-17",
-					"Statement": [
-						{
-							"Effect": "Allow",
-							"Principal": {
-								"Service": "lambda.amazonaws.com"
-							},
-							"Action": "sts:AssumeRole"
-						}
-					]
-				},
-				"ManagedPolicyArns": [
-					"arn:aws:iam::aws:policy/AWSBatchFullAccess",
-					"arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-					"arn:aws:iam::aws:policy/SecretsManagerReadWrite",
-					"arn:aws:iam::aws:policy/AmazonS3FullAccess",
-					"arn:aws:iam::aws:policy/AWSLambda_FullAccess",
-					"arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-					"arn:aws:iam::aws:policy/AmazonRedshiftFullAccess",
-					"arn:aws:iam::aws:policy/AmazonSQSFullAccess",
-					"arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole"
-				]
-			},
-			"Metadata": {
-				"AWS::CloudFormation::Designer": {
-					"id": "7fe53bfb-ccf0-4a80-b626-ef1b97de3af8"
-				}
-			}
-		},
-		"CfDirectDataEcsTaskExecutionRole": {
-			"Type": "AWS::IAM::Role",
-			"Properties": {
-				"RoleName": {
-					"Fn::Join": [
-						"-",
-						[
-							"cf-direct-data-ecs-task-execution-role",
-							{
-								"Ref": "AWS::Region"
-							}
-						]
-					]
-				},
-				"AssumeRolePolicyDocument": {
-					"Version": "2008-10-17",
-					"Statement": [
-						{
-							"Effect": "Allow",
-							"Principal": {
-								"Service": "ecs-tasks.amazonaws.com"
-							},
-							"Action": "sts:AssumeRole"
-						}
-					]
-				},
-				"ManagedPolicyArns": [
-					"arn:aws:iam::aws:policy/AmazonAPIGatewayInvokeFullAccess",
-					"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
-					"arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-					"arn:aws:iam::aws:policy/AmazonS3FullAccess",
-					"arn:aws:iam::aws:policy/AWSBatchFullAccess",
-					"arn:aws:iam::aws:policy/AWSLambda_FullAccess",
-					"arn:aws:iam::aws:policy/SecretsManagerReadWrite"
-				]
-			}
-		},
-		"CfDirectDataRedshiftRole": {
-			"Type": "AWS::IAM::Role",
-			"Properties": {
-				"RoleName": {
-					"Fn::Join": [
-						"-",
-						[
-							"cf-direct-data-redshift-role",
-							{
-								"Ref": "AWS::Region"
-							}
-						]
-					]
-				},
-				"AssumeRolePolicyDocument": {
-					"Version": "2012-10-17",
-					"Statement": [
-						{
-							"Effect": "Allow",
-							"Principal": {
-								"Service": "redshift.amazonaws.com"
-							},
-							"Action": "sts:AssumeRole"
-						}
-					]
-				},
-				"ManagedPolicyArns": [
-					"arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"
-				]
-			},
-			"Metadata": {
-				"AWS::CloudFormation::Designer": {
-					"id": "7fe53bfb-ccf0-4a80-b626-ef1b97de3af8"
-				}
-			}
-		},
-		"CfDirectDataLambda": {
-			"Type": "AWS::Lambda::Function",
-			"Properties": {
-				"Role": {
-					"Fn::GetAtt": [
-						"CfDirectDataLambdaExecutionRole",
-						"Arn"
-					]
-				},
-				"FunctionName": "cf-direct-data",
-				"Timeout": 900,
-				"MemorySize": 10240,
-				"PackageType": "Image",
-				"Code": {
-					"ImageUri": {
-						"Fn::Sub": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cf-direct-data:lambda-latest"
-					}
-				}
-			},
-			"Metadata": {
-				"AWS::CloudFormation::Designer": {
-					"id": "ee43fa17-a878-4ec1-b441-cc44f82af366"
-				}
-			}
-		},
-		"CfDirectDataSecret": {
-			"Type": "AWS::SecretsManager::Secret",
-			"Properties": {
-				"Name": "direct-data-config.ini",
-				"SecretString": "[system]\nyear=2024\n[vault]\nusername=integration.user@cholecap.com\npassword=password\ndns=cholecap.veevavault.com\nversion=v24.1\n[s3]\nbucket_name=cf-direct-data\nstarting_directory=direct-data\n[redshift]\nhost=cf-direct-data.123456abcd.us-east-1.redshift.amazonaws.com\nport=5439\nuser=awsuser\npassword=Passw0rd\ndbname=dev\niam_redshift_s3_read=arn:aws:iam::123456:role/RedshiftS3Read\n[lambda]\nfunction_name=cf-direct-data\n[batch]\njob_name=cf-direct-data\njob_queue=cf-direct-data\njob_definition=cf-direct-data"
-			}
-		},
-		"CfDirectDataRedshiftClusterSubnet": {
-			"Type": "AWS::Redshift::ClusterSubnetGroup",
-			"Properties": {
-				"Description": "Subnet for direct data cluster",
-				"SubnetIds": [
-					{
-						"Ref": "CfDirectDataVpcSubnet"
-					}
-				]
-			}
-		},
-		"CfDirectDataRedshiftCluster": {
-			"Type": "AWS::Redshift::Cluster",
-			"Properties": {
-				"ClusterIdentifier": "cf-direct-data",
-				"NodeType": "dc2.large",
-				"MasterUsername": "awsuser",
-				"MasterUserPassword": "Passw0rd",
-				"ClusterType": "single-node",
-				"DBName": "dev",
-				"IamRoles": [
-					{
-						"Fn::GetAtt": [
-							"CfDirectDataRedshiftRole",
-							"Arn"
-						]
-					},
-					{
-						"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/redshift.amazonaws.com/AWSServiceRoleForRedshift"
-					}
-				],
-				"ClusterSubnetGroupName": {
-					"Ref": "CfDirectDataRedshiftClusterSubnet"
-				},
-				"VpcSecurityGroupIds": [
-					{
-						"Ref": "CfDirectDataSecurityGroup"
-					}
-				]
-			}
-		},
-		"CfDirectDataComputeEnvironment": {
-			"Type": "AWS::Batch::ComputeEnvironment",
-			"Properties": {
-				"ComputeEnvironmentName": "cf-direct-data",
-				"Type": "MANAGED",
-				"ServiceRole": {
-					"Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
-				},
-				"State": "ENABLED",
-				"ComputeResources": {
-					"Type": "FARGATE",
-					"MaxvCpus": 256,
-					"Subnets": [
-						{
-							"Ref": "CfDirectDataVpcSubnet"
-						}
-					],
-					"SecurityGroupIds": [
-						{
-							"Ref": "CfDirectDataSecurityGroup"
-						}
-					]
-				}
-			}
-		},
-		"CfDirectDataJobQueue": {
-			"Type": "AWS::Batch::JobQueue",
-			"DependsOn": "CfDirectDataComputeEnvironment",
-			"Properties": {
-				"ComputeEnvironmentOrder": [
-					{
-						"ComputeEnvironment": {
-							"Fn::Sub": "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:compute-environment/cf-direct-data"
-						},
-						"Order": "1"
-					}
-				],
-				"Priority": 1,
-				"JobQueueName": "cf-direct-data",
-				"State": "ENABLED"
-			}
-		},
-		"CfDirectDataJobDefinition": {
-			"Type": "AWS::Batch::JobDefinition",
-			"Properties": {
-				"Type": "container",
-				"JobDefinitionName": "cf-direct-data",
-				"PlatformCapabilities": [
-					"FARGATE"
-				],
-				"ContainerProperties": {
-					"Image": {
-						"Fn::Sub": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cf-direct-data:batch-latest"
-					},
-					"Command": [
-						"python",
-						"run.py",
-						"--step",
-						"$STEP",
-						"--source_filepath",
-						"$SOURCE_FILEPATH",
-						"--target_filepath",
-						"$TARGET_FILEPATH",
-						"--continue_processing",
-						"$CONTINUE_PROCESSING",
-						"--start_time",
-						"$START_TIME",
-						"--stop_time",
-						"$STOP_TIME"
-					],
-					"JobRoleArn": {
-						"Fn::GetAtt": [
-							"CfDirectDataEcsTaskExecutionRole",
-							"Arn"
-						]
-					},
-					"ExecutionRoleArn": {
-						"Fn::GetAtt": [
-							"CfDirectDataEcsTaskExecutionRole",
-							"Arn"
-						]
-					},
-					"ResourceRequirements": [
-						{
-							"Value": "1.0",
-							"Type": "VCPU"
-						},
-						{
-							"Value": "8192",
-							"Type": "MEMORY"
-						}
-					],
-					"RuntimePlatform": {
-						"OperatingSystemFamily": "LINUX",
-						"CpuArchitecture": "X86_64"
-					},
-					"NetworkConfiguration": {
-						"AssignPublicIp": "ENABLED"
-					},
-					"EphemeralStorage": {
-						"SizeInGiB": 200
-					},
-					"LogConfiguration": {
-						"LogDriver": "awslogs"
-					}
-				}
-			}
-		}
-	}
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Metadata":
+    {
+      "AWS::CloudFormation::Designer":
+        {
+          "9ca5f848-8195-4390-9090-b0ce8302d4d3":
+            {
+              "size": { "width": 140, "height": 140 },
+              "position": { "x": 294, "y": 169 },
+              "z": 0,
+              "embeds": [],
+            },
+          "490f8729-01cc-4bc0-b9c1-c7d4fdcc4a3c":
+            {
+              "size": { "width": 140, "height": 140 },
+              "position": { "x": 150, "y": 170 },
+              "z": 0,
+              "embeds": [],
+            },
+          "cc139752-432c-4a72-a9d3-8c2947da4c3e":
+            {
+              "size": { "width": 60, "height": 60 },
+              "position": { "x": 450, "y": 210 },
+              "z": 0,
+              "embeds": [],
+            },
+          "7fe53bfb-ccf0-4a80-b626-ef1b97de3af8":
+            {
+              "size": { "width": 60, "height": 60 },
+              "position": { "x": 60, "y": 200 },
+              "z": 0,
+              "embeds": [],
+            },
+          "ee43fa17-a878-4ec1-b441-cc44f82af366":
+            {
+              "size": { "width": 60, "height": 60 },
+              "position": { "x": 64.94355492876814, "y": 108.01864856583974 },
+              "z": 0,
+            },
+        },
+    },
+  "Resources":
+    {
+      "CfDirectDataInternetGateway":
+        { "Type": "AWS::EC2::InternetGateway", "Properties": {} },
+      "CfDirectDataVpc":
+        {
+          "Type": "AWS::EC2::VPC",
+          "Properties":
+            {
+              "CidrBlock": "10.0.0.0/16",
+              "EnableDnsSupport": "true",
+              "Tags": [{ "Key": "Name", "Value": "cf-direct-data" }],
+            },
+          "Metadata":
+            {
+              "AWS::CloudFormation::Designer":
+                { "id": "9ca5f848-8195-4390-9090-b0ce8302d4d3" },
+            },
+        },
+      "InternetGatewayAttachment":
+        {
+          "Type": "AWS::EC2::VPCGatewayAttachment",
+          "Properties":
+            {
+              "VpcId": { "Ref": "CfDirectDataVpc" },
+              "InternetGatewayId": { "Ref": "CfDirectDataInternetGateway" },
+            },
+        },
+      "CfDirectDataVpcSubnet":
+        {
+          "Type": "AWS::EC2::Subnet",
+          "Properties":
+            {
+              "CidrBlock": "10.0.0.0/24",
+              "VpcId": { "Ref": "CfDirectDataVpc" },
+              "Tags": [{ "Key": "Name", "Value": "cf-direct-data" }],
+            },
+          "Metadata":
+            {
+              "AWS::CloudFormation::Designer":
+                { "id": "490f8729-01cc-4bc0-b9c1-c7d4fdcc4a3c" },
+            },
+        },
+      "CfDirectDataSecurityGroup":
+        {
+          "Type": "AWS::EC2::SecurityGroup",
+          "Properties":
+            {
+              "GroupDescription": "Allows traffic to redshift",
+              "GroupName": "cf-direct-data-security-group",
+              "VpcId": { "Ref": "CfDirectDataVpc" },
+              "SecurityGroupIngress":
+                [
+                  {
+                    "FromPort": 80,
+                    "IpProtocol": "tcp",
+                    "CidrIp": "0.0.0.0/0",
+                    "ToPort": 80,
+                  },
+                  {
+                    "FromPort": 5439,
+                    "IpProtocol": "tcp",
+                    "CidrIp": "0.0.0.0/0",
+                    "ToPort": 5439,
+                  },
+                ],
+            },
+        },
+      "CfDirectDataS3":
+        {
+          "Type": "AWS::S3::Bucket",
+          "Properties":
+            {
+              "BucketName":
+                {
+                  "Fn::Sub": "${AWS::AccountId}-${AWS::Region}-cf-direct-data",
+                },
+            },
+          "Metadata":
+            {
+              "AWS::CloudFormation::Designer":
+                { "id": "cc139752-432c-4a72-a9d3-8c2947da4c3e" },
+            },
+        },
+      "CfDirectDataLambdaExecutionRole":
+        {
+          "Type": "AWS::IAM::Role",
+          "Properties":
+            {
+              "RoleName":
+                {
+                  "Fn::Join":
+                    [
+                      "-",
+                      [
+                        "cf-direct-data-lambda-execution-role",
+                        { "Ref": "AWS::Region" },
+                      ],
+                    ],
+                },
+              "AssumeRolePolicyDocument":
+                {
+                  "Version": "2012-10-17",
+                  "Statement":
+                    [
+                      {
+                        "Effect": "Allow",
+                        "Principal": { "Service": "lambda.amazonaws.com" },
+                        "Action": "sts:AssumeRole",
+                      },
+                    ],
+                },
+              "ManagedPolicyArns":
+                [
+                  "arn:aws:iam::aws:policy/AWSBatchFullAccess",
+                  "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+                  "arn:aws:iam::aws:policy/SecretsManagerReadWrite",
+                  "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+                  "arn:aws:iam::aws:policy/AWSLambda_FullAccess",
+                  "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+                  "arn:aws:iam::aws:policy/AmazonRedshiftFullAccess",
+                  "arn:aws:iam::aws:policy/AmazonSQSFullAccess",
+                  "arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole",
+                ],
+            },
+          "Metadata":
+            {
+              "AWS::CloudFormation::Designer":
+                { "id": "7fe53bfb-ccf0-4a80-b626-ef1b97de3af8" },
+            },
+        },
+      "CfDirectDataEcsTaskExecutionRole":
+        {
+          "Type": "AWS::IAM::Role",
+          "Properties":
+            {
+              "RoleName":
+                {
+                  "Fn::Join":
+                    [
+                      "-",
+                      [
+                        "cf-direct-data-ecs-task-execution-role",
+                        { "Ref": "AWS::Region" },
+                      ],
+                    ],
+                },
+              "AssumeRolePolicyDocument":
+                {
+                  "Version": "2008-10-17",
+                  "Statement":
+                    [
+                      {
+                        "Effect": "Allow",
+                        "Principal": { "Service": "ecs-tasks.amazonaws.com" },
+                        "Action": "sts:AssumeRole",
+                      },
+                    ],
+                },
+              "ManagedPolicyArns":
+                [
+                  "arn:aws:iam::aws:policy/AmazonAPIGatewayInvokeFullAccess",
+                  "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+                  "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+                  "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+                  "arn:aws:iam::aws:policy/AWSBatchFullAccess",
+                  "arn:aws:iam::aws:policy/AWSLambda_FullAccess",
+                  "arn:aws:iam::aws:policy/SecretsManagerReadWrite",
+                ],
+            },
+        },
+      "CfDirectDataRedshiftRole":
+        {
+          "Type": "AWS::IAM::Role",
+          "Properties":
+            {
+              "RoleName":
+                {
+                  "Fn::Join":
+                    [
+                      "-",
+                      [
+                        "cf-direct-data-redshift-role",
+                        { "Ref": "AWS::Region" },
+                      ],
+                    ],
+                },
+              "AssumeRolePolicyDocument":
+                {
+                  "Version": "2012-10-17",
+                  "Statement":
+                    [
+                      {
+                        "Effect": "Allow",
+                        "Principal": { "Service": "redshift.amazonaws.com" },
+                        "Action": "sts:AssumeRole",
+                      },
+                    ],
+                },
+              "ManagedPolicyArns":
+                ["arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"],
+            },
+          "Metadata":
+            {
+              "AWS::CloudFormation::Designer":
+                { "id": "7fe53bfb-ccf0-4a80-b626-ef1b97de3af8" },
+            },
+        },
+      "CfDirectDataLambda":
+        {
+          "Type": "AWS::Lambda::Function",
+          "Properties":
+            {
+              "Role":
+                { "Fn::GetAtt": ["CfDirectDataLambdaExecutionRole", "Arn"] },
+              "FunctionName": "cf-direct-data",
+              "Timeout": 900,
+              "MemorySize": 10240,
+              "PackageType": "Image",
+              "Environment":
+                {
+                  "Variables":
+                    {
+                      "EXTRACT_SOURCE_CONTENT": "False",
+                      "SECRET_NAME": "direct-data-config.ini",
+                    },
+                },
+              "Code":
+                {
+                  "ImageUri":
+                    {
+                      "Fn::Sub": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cf-direct-data:lambda-latest",
+                    },
+                },
+            },
+          "Metadata":
+            {
+              "AWS::CloudFormation::Designer":
+                { "id": "ee43fa17-a878-4ec1-b441-cc44f82af366" },
+            },
+        },
+      "CfDirectDataSecret":
+        {
+          "Type": "AWS::SecretsManager::Secret",
+          "Properties":
+            {
+              "Name": "direct-data-config.ini",
+              "SecretString": "[demo]\n;vault\nvault_username=integration.user@cholecap.com\nvault_password=password\nvault_dns=cholecap.veevavault.com\nvault_version=v24.1\n;redshift\nredshift_host=cf-direct-data.123456abcd.us-east-1.redshift.amazonaws.com\nredshift_port=5439\nredshift_user=awsuser\nredshift_password=Passw0rd\nredshift_dbname=dev\nredshift_iam_redshift_s3_read=arn:aws:iam::123456:role/RedshiftS3Read\n;s3\ns3_bucket_name=cf-direct-data\ns3_starting_directory=direct-data\n;batch\njob_name=cf-direct-data\njob_queue=cf-direct-data\njob_definition=cf-direct-data\nlambda_function_name=cf-direct-data",
+            },
+        },
+      "CfDirectDataRedshiftClusterSubnet":
+        {
+          "Type": "AWS::Redshift::ClusterSubnetGroup",
+          "Properties":
+            {
+              "Description": "Subnet for direct data cluster",
+              "SubnetIds": [{ "Ref": "CfDirectDataVpcSubnet" }],
+            },
+        },
+      "CfDirectDataRedshiftCluster":
+        {
+          "Type": "AWS::Redshift::Cluster",
+          "Properties":
+            {
+              "ClusterIdentifier": "cf-direct-data",
+              "NodeType": "dc2.large",
+              "MasterUsername": "awsuser",
+              "MasterUserPassword": "Passw0rd",
+              "ClusterType": "single-node",
+              "DBName": "dev",
+              "IamRoles":
+                [
+                  { "Fn::GetAtt": ["CfDirectDataRedshiftRole", "Arn"] },
+                  {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/redshift.amazonaws.com/AWSServiceRoleForRedshift",
+                  },
+                ],
+              "ClusterSubnetGroupName":
+                { "Ref": "CfDirectDataRedshiftClusterSubnet" },
+              "VpcSecurityGroupIds": [{ "Ref": "CfDirectDataSecurityGroup" }],
+            },
+        },
+      "CfDirectDataComputeEnvironment":
+        {
+          "Type": "AWS::Batch::ComputeEnvironment",
+          "Properties":
+            {
+              "ComputeEnvironmentName": "cf-direct-data",
+              "Type": "MANAGED",
+              "ServiceRole":
+                {
+                  "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch",
+                },
+              "State": "ENABLED",
+              "ComputeResources":
+                {
+                  "Type": "FARGATE",
+                  "MaxvCpus": 256,
+                  "Subnets": [{ "Ref": "CfDirectDataVpcSubnet" }],
+                  "SecurityGroupIds": [{ "Ref": "CfDirectDataSecurityGroup" }],
+                },
+            },
+        },
+      "CfDirectDataJobQueue":
+        {
+          "Type": "AWS::Batch::JobQueue",
+          "DependsOn": "CfDirectDataComputeEnvironment",
+          "Properties":
+            {
+              "ComputeEnvironmentOrder":
+                [
+                  {
+                    "ComputeEnvironment":
+                      {
+                        "Fn::Sub": "arn:${AWS::Partition}:batch:${AWS::Region}:${AWS::AccountId}:compute-environment/cf-direct-data",
+                      },
+                    "Order": "1",
+                  },
+                ],
+              "Priority": 1,
+              "JobQueueName": "cf-direct-data",
+              "State": "ENABLED",
+            },
+        },
+      "CfDirectDataJobDefinition":
+        {
+          "Type": "AWS::Batch::JobDefinition",
+          "Properties":
+            {
+              "Type": "container",
+              "JobDefinitionName": "cf-direct-data",
+              "PlatformCapabilities": ["FARGATE"],
+              "ContainerProperties":
+                {
+                  "Image":
+                    {
+                      "Fn::Sub": "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cf-direct-data:batch-latest",
+                    },
+                  "Command":
+                    [
+                      "python",
+                      "run.py",
+                      "--step",
+                      "$STEP",
+                      "--source_filepath",
+                      "$SOURCE_FILEPATH",
+                      "--target_filepath",
+                      "$TARGET_FILEPATH",
+                      "--continue_processing",
+                      "$CONTINUE_PROCESSING",
+                      "--start_time",
+                      "$START_TIME",
+                      "--stop_time",
+                      "$STOP_TIME",
+                    ],
+                  "JobRoleArn":
+                    {
+                      "Fn::GetAtt": ["CfDirectDataEcsTaskExecutionRole", "Arn"],
+                    },
+                  "ExecutionRoleArn":
+                    {
+                      "Fn::GetAtt": ["CfDirectDataEcsTaskExecutionRole", "Arn"],
+                    },
+                  "ResourceRequirements":
+                    [
+                      { "value": "4.0", "type": "VCPU" },
+                      { "value": "30720", "type": "MEMORY" },
+                    ],
+                  "RuntimePlatform":
+                    {
+                      "OperatingSystemFamily": "LINUX",
+                      "CpuArchitecture": "X86_64",
+                    },
+                  "NetworkConfiguration": { "AssignPublicIp": "ENABLED" },
+                  "EphemeralStorage": { "SizeInGiB": 200 },
+                  "LogConfiguration": { "LogDriver": "awslogs" },
+                },
+            },
+        },
+    },
 }
