@@ -600,14 +600,14 @@ def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -
         data_type_length = data_type_tuple[1]
 
         if math.isnan(data_type_length):
-            data_type_length = 17000
+            data_type_length = 34000
         else:
             data_type_length = int(data_type_length)
 
         k = update_table_name_that_starts_with_digit(k)
 
         if data_type == "id" or (k.lower() == 'id' and data_type == 'string'):
-            sql_str += f'"{k}" VARCHAR({data_type_length}) PRIMARY KEY, '
+            sql_str += f'"{k}" VARCHAR({data_type_length*2}) PRIMARY KEY, '
         elif data_type == "datetime":
             sql_str += f'"{k}" TIMESTAMPTZ, '
         elif data_type == "boolean":
@@ -621,7 +621,7 @@ def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -
         elif data_type == "date":
             sql_str += f'"{k}" DATE, '
         else:
-            sql_str += f'"{k}" VARCHAR({data_type_length}), '
+            sql_str += f'"{k}" VARCHAR({data_type_length*2}), '
 
     if is_picklist:
         sql_str += 'CONSTRAINT picklist_primary_key PRIMARY KEY (object, object_field, picklist_value_name), '

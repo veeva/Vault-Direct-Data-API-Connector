@@ -273,9 +273,10 @@ class RedshiftManager:
                     f"FORMAT AS CSV " \
                     f"QUOTE '\"' " \
                     f"IGNOREHEADER 1 " \
-                    f"TIMEFORMAT 'auto'" \
+                    f"TIMEFORMAT 'auto' " \
                     f"ACCEPTINVCHARS " \
-                    f"FILLRECORD"
+                    f"FILLRECORD" \
+
             try:
                 self.redshift_conn.run_query(query, False)
                 return True
