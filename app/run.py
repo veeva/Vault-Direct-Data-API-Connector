@@ -30,8 +30,17 @@ def lambda_handler(event, context):
     continue_processing = bool(integration_request.get_continue_processing())
     secret = integration_request.get_secret()
 
+
+    log_message(log_level='Debug',
+                message=f'Continue Processing: {continue_processing}',
+                context=None)
+
     if continue_processing is None or continue_processing == '':
         continue_processing = False
+
+        log_message(log_level='Debug',
+                    message=f'Continue Processing after null check: {continue_processing}',
+                    context=None)
 
     log_message(log_level='Info',
                 message=f'Starting Transaction with {step} step with {extract_type} extract type',
@@ -70,7 +79,7 @@ def lambda_handler(event, context):
         # Form job paramters and submit Batch job to unzip the retieved files
         job_parameter: Dict[str, str] = {'step': 'retrieve',
                                          'source_filepath': f'{s3_directory}',
-                                         'continue_processing': 'true',
+                                         'continue_processing': f'{continue_processing}',
                                          'start_time': f'{start_time}',
                                          'stop_time': f'{stop_time}',
                                          'extract_type': f'{extract_type}',

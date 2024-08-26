@@ -80,7 +80,20 @@ def main():
                                                            starting_directory=f'{s3_directory}/{file_name}',
                                                            secret_name=secret,
                                                            settings=settings)
-            if retrieval_success:
+
+            log_message(log_level='Debug',
+                        message=f'Retrieval Success: {retrieval_success}',
+                        context=None)
+
+            log_message(log_level='Debug',
+                        message=f'Continue Processing: {continue_processing}',
+                        context=None)
+
+            log_message(log_level='Debug',
+                        message=f'Both: {retrieval_success and continue_processing}',
+                        context=None)
+
+            if retrieval_success and continue_processing:
                 function_name = settings.config.get(secret, 'lambda_function_name')
 
                 payload: Dict[str, str] = {'step': 'unzip',

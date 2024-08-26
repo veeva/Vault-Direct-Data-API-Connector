@@ -82,7 +82,7 @@ Note: All resources should be created in the same AWS Region.
 * All other settings are default. Click through to create the role
 
 ### Cloudformation Stack
-* Download the <a href="https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/f56075ceebeda94d4867dfa41c22a1c15f95ad34/CloudFormationDirectDataTemplateLatest.yaml" download>Direct Data Cloudformation Template</a>
+* Download the <a href="https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/main/CloudFormationDirectDataTemplateLatest.yaml" download>Direct Data Cloudformation Template</a>
 * Navigate to the Cloudformation service in the AWS Console
 * Select `Create Stack` and `With new resources (standard)`
 * Configure the Stack with the following settings:
@@ -152,7 +152,7 @@ Note: All resources should be created in the same AWS Region.
 * Save the route table
 
 ### Initial Full Extract Invocation
-* Download the <a href="https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/f56075ceebeda94d4867dfa41c22a1c15f95ad34/Public%20Direct%20Data%20Lambda%20API.postman_collection.json" download>Direct Data Connector Postman Collection</a>
+* Download the <a href="https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/main/Public%20Direct%20Data%20Lambda%20API.postman_collection.json" download>Direct Data Connector Postman Collection</a>
 * Import the collection into Postman
 * Open the _List and Download Direct Data Files to S3_ endpoint
 * Update the URL to the previously noted `API endpoint` from the lambda trigger

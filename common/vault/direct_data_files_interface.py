@@ -222,6 +222,12 @@ def verify_redshift_tables(chunk_size: int, bucket_name: str, manifest_path: str
             ['type', 'length']
         ] = ['String', 255]
 
+        metadata_dataframe_itr.loc[
+            (metadata_dataframe_itr['extract'] == 'Object.edl_item__v') &
+            (metadata_dataframe_itr['column_name'] == 'progress_icon__v'),
+            ['type', 'length']
+        ] = ['String', 32000]
+
         if metadata_deletes_filepath is not None and len(metadata_deletes_filepath) > 0:
             log_message(log_level='Info',
                         message=f'The metadata_deletes file exists',
@@ -599,15 +605,18 @@ def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -
         data_type = data_type_tuple[0].lower()
         data_type_length = data_type_tuple[1]
 
-        if math.isnan(data_type_length):
+        print(f'Data Type Length: {data_type_length}')
+
+        if math.isnan(data_type_length) or not data_type_length or data_type_length == "":
+            print(f'Data type length is not a number.')
             data_type_length = 34000
         else:
-            data_type_length = int(data_type_length)
+            data_type_length = int(data_type_length) * 2
 
         k = update_table_name_that_starts_with_digit(k)
 
         if data_type == "id" or (k.lower() == 'id' and data_type == 'string'):
-            sql_str += f'"{k}" VARCHAR({data_type_length*2}) PRIMARY KEY, '
+            sql_str += f'"{k}" VARCHAR({data_type_length}) PRIMARY KEY, '
         elif data_type == "datetime":
             sql_str += f'"{k}" TIMESTAMPTZ, '
         elif data_type == "boolean":
@@ -621,7 +630,7 @@ def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -
         elif data_type == "date":
             sql_str += f'"{k}" DATE, '
         else:
-            sql_str += f'"{k}" VARCHAR({data_type_length*2}), '
+            sql_str += f'"{k}" VARCHAR({data_type_length}), '
 
     if is_picklist:
         sql_str += 'CONSTRAINT picklist_primary_key PRIMARY KEY (object, object_field, picklist_value_name), '
