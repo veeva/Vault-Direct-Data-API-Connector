@@ -608,8 +608,7 @@ def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -
         print(f'Data Type Length: {data_type_length}')
 
         if math.isnan(data_type_length) or not data_type_length or data_type_length == "":
-            print(f'Data type length is not a number.')
-            data_type_length = 34000
+            data_type_length = 32000
         else:
             data_type_length = int(data_type_length) * 2
 
