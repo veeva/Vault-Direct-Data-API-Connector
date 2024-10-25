@@ -2,12 +2,8 @@ import gzip
 import io
 import json
 import math
-import sys
-import time
 import tarfile
 import csv
-import urllib.parse
-from pathlib import Path
 from io import BytesIO, StringIO
 from typing import Dict, List, Any
 
@@ -16,7 +12,6 @@ import pandas as pd
 from botocore.exceptions import ClientError
 from common.aws_utilities import start_batch_job, upload_large_file
 from common.integrationConfigClass import IntegrationConfigClass
-from common.aws_utilities import RedshiftConnection
 
 from common.log_message import log_message
 from common.redshiftManager import RedshiftManager, update_table_name_that_starts_with_digit
@@ -28,10 +23,10 @@ def load_data_into_redshift(schema_name: str, tables_to_load: Dict[str, str], st
     """
     This method defines the S3 URI of the CSV files and retrieves the CSV headers in the order the columns in the file.
 
-    :param secret:
-    :param redshift_manager:
-    :param extract_docs:
-    :param settings:
+    :param secret: The secret file name
+    :param redshift_manager: This is a class that manages Redshift connections.
+    :param extract_docs: A boolean that determines whether to extract document source content.
+    :param settings: This is a settings class that allows access to static variables in a specified Secrets Manager block.
     :param schema_name: Name of the Redshift schema
     :param tables_to_load: A dictionary that maps the table name to the related CSV file
     :param starting_directory: The starting directory where the of where the direct data file is located
@@ -249,10 +244,14 @@ def verify_redshift_tables(chunk_size: int, bucket_name: str, manifest_path: str
     # If this a full extract, the assumption is that the database is being established and the metadata table needs
     # to be created first.
     if extract_type == "full":
-        load_metadata_table(schema_name=schema_name,
-                            metadata_dataframe=metadata_dataframe_itr,
-                            redshift_manager=redshift_manager,
-                            settings=settings)
+        log_message(log_level='Info',
+                    message=f'Loading metadata table for full load',
+                    context=None)
+        create_or_update_metadata_table(schema_name=schema_name,
+                                        metadata_dataframe=metadata_dataframe_itr,
+                                        redshift_manager=redshift_manager,
+                                        settings=settings)
+
     # Process each chunked data from the manifest dataframe
     for chunk in manifest_dataframe_itr:
         for index, row in chunk.iterrows():
@@ -278,6 +277,8 @@ def verify_redshift_tables(chunk_size: int, bucket_name: str, manifest_path: str
                             tables_to_load[full_table_name] = file_path
                     elif type == 'deletes':
                         tables_to_delete[full_table_name] = file_path
+                else:
+                    tables_to_load[full_table_name] = file_path
 
     if len(tables_to_create) > 0:
         log_message(log_level='Info',
@@ -316,15 +317,18 @@ def verify_redshift_tables(chunk_size: int, bucket_name: str, manifest_path: str
                                         table_names=tables_to_delete,
                                         starting_directory=starting_directory,
                                         s3_bucket=bucket_name,
-                                        redshift_manager=redshift_manager)
+                                        redshift_manager=redshift_manager,
+                                        settings=settings)
 
 
-def load_metadata_table(schema_name: str, metadata_dataframe: pd.DataFrame, redshift_manager: RedshiftManager,
-                        settings: IntegrationConfigClass):
+def create_or_update_metadata_table(schema_name: str, metadata_dataframe: pd.DataFrame, redshift_manager: RedshiftManager,
+                                    settings: IntegrationConfigClass):
     """
     This method creates or updates the Metadata table. First it checks to see if the table exists.
     If it does then it will update the columns of the table, if not it will create the table in the specified schema
 
+    :param redshift_manager: This is a class that manages Redshift connections.
+    :param settings: A settings class that allows accessing static values in the secrets manager
     :param schema_name: The name of the schema where the Metadata table will be created or where it is currently located
     :param metadata_dataframe: The metadata dataframe that documents the current columns of the Metadata table
     """
@@ -345,6 +349,7 @@ def load_metadata_table(schema_name: str, metadata_dataframe: pd.DataFrame, reds
                                                column_types=create_sql_str(column_type_length, False))
 
 
+
 def verify_and_update_existing_tables(table_names: List[str], metadata_dataframe: pd.DataFrame,
                                       metadata_deletes_dataframe: pd.DataFrame, schema_name: str,
                                       redshift_manager: RedshiftManager):
@@ -352,7 +357,7 @@ def verify_and_update_existing_tables(table_names: List[str], metadata_dataframe
     This method verifies that the tables from the manifest files are listed in the metadata file.
     It then retrieves the columns listed in the metadata file, if the metadata_deletes file exists then it lists
     the columns that need to be removed. The method then pass the list of new and
-    :param redshift_manager:
+    :param redshift_manager: This is a class that manages Redshift connections.
     :param table_names: A list of tables to verify and update
     :param metadata_dataframe: The metadata dataframe to parse
     :param metadata_deletes_dataframe: the metadata_deletes dataframe to parse
@@ -534,9 +539,9 @@ def update_reference_columns(table_to_column_dict: dict[str, dict[str, str]], sc
     """
     This method loops through the input dictionary and if the reference columns exists,
     a foreign key is added to the table.
-    :param redshift_manager:
-    :param table_to_column_dict:
-    :param schema_name:
+    :param redshift_manager: This is a class that manages Redshift connections.
+    :param table_to_column_dict: This is a mapping of what tables and their references
+    :param schema_name: The name of the schema of the database
     :return:
     """
     for table, column_and_references in table_to_column_dict.items():
@@ -547,11 +552,13 @@ def update_reference_columns(table_to_column_dict: dict[str, dict[str, str]], sc
 
 
 def delete_data_from_redshift_table(schema_name: str, table_names: Dict[str, str], starting_directory: str,
-                                    s3_bucket: str, redshift_manager: RedshiftManager):
+                                    s3_bucket: str, redshift_manager: RedshiftManager,
+                                    settings: IntegrationConfigClass):
     """
     This method iterates through each table ame and determines the S3 bucket location of the CSV file of the data to delete
     from the table.
-    :param redshift_manager:
+    :param settings: This is the settings class to get static values for each secret specified
+    :param redshift_manager: This is a class that manages Redshift connections.
     :param schema_name: The name of the schema where the table resides
     :param table_names: A dictionary that maps the table to the CSV file location and name
     :param starting_directory: The starting directory of the Direct Data file
@@ -559,7 +566,8 @@ def delete_data_from_redshift_table(schema_name: str, table_names: Dict[str, str
     """
     try:
         for table, file in table_names.items():
-            if redshift_manager.redshift_table_exists(schema_name=schema_name, table_name=table.split(".")[1].lower()):
+            if redshift_manager.redshift_table_exists(schema_name=schema_name, table_name=table.split(".")[1].lower(),
+                                                      settings=settings):
                 table_s3_uri = f"s3://{s3_bucket}/{starting_directory}/{file}"
                 log_message(log_level='Debug',
                             message=f'Delete file: {table_s3_uri} for table: {table}',
@@ -605,8 +613,6 @@ def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -
         data_type = data_type_tuple[0].lower()
         data_type_length = data_type_tuple[1]
 
-        print(f'Data Type Length: {data_type_length}')
-
         if math.isnan(data_type_length) or not data_type_length or data_type_length == "":
             data_type_length = 32000
         else:
@@ -629,6 +635,9 @@ def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -
         elif data_type == "date":
             sql_str += f'"{k}" DATE, '
         else:
+            # This logic to handle icon fields.
+            if data_type == 'string' and data_type_length == 2:
+                data_type_length = 64000
             sql_str += f'"{k}" VARCHAR({data_type_length}), '
 
     if is_picklist:

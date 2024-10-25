@@ -275,7 +275,8 @@ class RedshiftManager:
                     f"IGNOREHEADER 1 " \
                     f"TIMEFORMAT 'auto' " \
                     f"ACCEPTINVCHARS " \
-                    f"FILLRECORD" \
+                    f"FILLRECORD " \
+                    f"TRUNCATECOLUMNS" \
 
             try:
                 self.redshift_conn.run_query(query, False)
