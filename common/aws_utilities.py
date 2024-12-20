@@ -1,10 +1,16 @@
 import json
+import math
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Iterable
 
 import psycopg2
 import boto3
 from .log_message import log_message
 from psycopg2 import OperationalError
 from botocore.exceptions import ClientError
+
+thread_local = threading.local()
 
 
 def invoke_lambda(function_name: str, payload):
@@ -295,22 +301,100 @@ def check_file_exists_s3(bucket_name: str, file_key: str) -> bool:
             raise e
 
 
-class RedshiftConnection:
+def execute_in_threads(task: Callable, args_list: Iterable[tuple]) -> None:
     """
-    This class is a connector to Redshift.
-    This is utilized to execute SQL queries to the specified Redshift database.
+    General method to execute tasks in parallel using threading.
     """
+    with ThreadPoolExecutor() as executor:
+        # Submit all tasks to the executor
+        futures = {executor.submit(task, *args): args for args in args_list}
 
+        # Wait for each future to complete and handle exceptions
+        for future in as_completed(futures):
+            task_args = futures[future]
+            try:
+                result = future.result()  # Will raise any exceptions that occurred during task execution
+            except Exception as e:
+                log_message(log_level='Error',
+                            message=f'Exception occurred for args: {task_args}',
+                            exception=e,
+                            context=None)
+
+
+def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -> str:
+    """
+    This method ingests a dictionary that maps a column name to the data type and the length of the string limit (if a string),
+    and generates a part of a SQL string that will defines the column of a table when it is created.
+    This adds additional constraints for the picklist table.
+    :param fields_dict: A dictionary that maps columns to data types and string lengths
+    :param is_picklist: A boolean that signifies if the table being created is the picklist table
+    :return: A partial SQL string for the column creation
+    """
+    sql_str = ''
+
+    for k, v in fields_dict.items():
+        if isinstance(v, tuple):
+            data_type_tuple = v
+        else:
+            data_type_tuple = tuple[v]
+
+        data_type = data_type_tuple[0].lower()
+        data_type_length = data_type_tuple[1]
+        if data_type_length is None or data_type_length == "" or (isinstance(data_type_length, float) and math.isnan(data_type_length)):
+            data_type_length = 64000
+        else:
+            data_type_length = int(data_type_length)
+            if data_type_length > 32000:
+                data_type_length = 64000
+            else:
+                data_type_length *= 2
+
+        k = update_table_name_that_starts_with_digit(k)
+
+        if data_type == "id" or (k.lower() == 'id' and data_type == 'string'):
+            sql_str += f'"{k}" VARCHAR({data_type_length}) PRIMARY KEY, '
+        elif data_type == "datetime" or data_type == "timestamp with time zone":
+            sql_str += f'"{k}" TIMESTAMPTZ, '
+        elif data_type == "boolean":
+            sql_str += f'"{k}" BOOLEAN, '
+        elif data_type == "number" or data_type == "numeric":
+            sql_str += f'"{k}" NUMERIC'
+            if k.lower() == "id":
+                sql_str += f' PRIMARY KEY, '
+            else:
+                sql_str += f', '
+        elif data_type == "date":
+            sql_str += f'"{k}" DATE, '
+        else:
+            # This logic to handle icon fields.
+            if data_type == 'string' and data_type_length == 2:
+                data_type_length = 64000
+            sql_str += f'"{k}" VARCHAR({data_type_length}), '
+
+    if is_picklist:
+        sql_str += 'CONSTRAINT picklist_primary_key PRIMARY KEY (object, object_field, picklist_value_name), '
+    sql_str = sql_str[:-2]
+    return sql_str
+
+
+def update_table_name_that_starts_with_digit(table_name: str) -> str:
+    """
+    This method handles reconciling Vault objects that begin with a number and appending a 'n_' so that Redshift will
+    accept the naming convention
+    :param table_name: The name of the table that needs to be update
+    :return: The updated table name
+    """
+    if table_name[0].isdigit():
+        return f'n_{table_name}'
+    else:
+        return table_name
+
+
+class RedshiftConnection:
     def __init__(self, db_name, hostname, port_number, username, user_password):
         """
-        This is initializes the Redshift Connector class with the given paramters that allows the class to connect to an
-        active Redshift cluster database
-
-        :param db_name: Name of the database to connect to
-        :param hostname: The name of the host of the Redshift cluster
-        :param port_number: The port number used to connect.
-        :param username: Username of the Redshift user defined on the cluster
-        :param user_password: Password for the Redshift user
+        This initializes the Redshift Connector class with the given parameters that allow the class to connect to an
+        active Redshift cluster database.
         """
         self.db_name = db_name
         self.host = hostname
@@ -318,77 +402,93 @@ class RedshiftConnection:
         self.user = username
         self.password = user_password
         self.connected = False
-        self.con = self.connect_to_database()
 
     def connect_to_database(self):
         """
-        This method connects the Redshift connector to the database
-
-        :return: If successful, returns a connected Redshift connector
+        This method connects the Redshift connector to the database for each thread.
+        If a connection already exists for the thread, it uses that connection.
         """
         try:
-            con = psycopg2.connect(dbname=self.db_name, host=self.host, port=self.port,
-                                   user=self.user, password=self.password)
-            con.autocommit = True
-            self.connected = True
+            # Check if a connection exists in thread-local storage
+            if not hasattr(thread_local, 'conn') or thread_local.conn is None:
+                # If no connection exists, create a new one
+                con = psycopg2.connect(
+                    dbname=self.db_name,
+                    host=self.host,
+                    port=self.port,
+                    user=self.user,
+                    password=self.password
+                )
+                con.autocommit = True
+                thread_local.conn = con  # Store the connection in thread-local storage
+                self.connected = True
 
-            return con
+            # Return the connection from thread-local storage
+            return thread_local.conn
+
         except OperationalError as e:
-            log_message(log_level='Error',
-                        message=f'Failed to connect to database',
-                        exception=e,
-                        context=None)
+            log_message(
+                log_level='Error',
+                message='Failed to connect to database',
+                exception=e,
+                context=None
+            )
+            raise e
 
     def run_query(self, query, keep_connection_open: bool):
         """
-        This method is a general method to execute Redshift SQL queries to the database.
-
-        :param query: A Redshift SQL query to execute
-        :param keep_connection_open: A boolean to signify to keep the connection open or close it.
+        Executes Redshift SQL queries using the thread-local connection.
         """
         try:
-            if self.connected is False:
-                self.con = self.connect_to_database()
-            log_message(log_level='Debug',
-                        message=f'Query: {query}',
-                        context=None)
-            with self.con.cursor() as cursor:
+            con = self.connect_to_database()  # Each thread gets its own connection
+            log_message(log_level='Debug', message=f'Query: {query}', context=None)
+            with con.cursor() as cursor:
                 cursor.execute(query)
-            self.con.commit()
+            con.commit()
             cursor.close()
             if not keep_connection_open:
-                self.con.close()
-                if self.connected is True:
-                    self.connected = False
+                con.close()
+                thread_local.conn = None  # Reset thread-local connection
+                self.connected = False
         except Exception as e:
+            log_message(log_level='Error',
+                        message=f'Error executing query: {query}',
+                        exception=e,
+                        context=None)
             raise e
 
     def table_exists_query_execution(self, query):
         """
-        This method executes a Redshift SQL query that specifically determines whether a table exists or not
+        This method executes a Redshift SQL query that specifically determines whether a table exists or not.
 
         :param query: A Redshift SQL query
-        :return: Returns ture if the table exists, false if it does not
+        :return: Returns true if the table exists, false if it does not
         """
-        if self.connected is False:
-            self.con = self.connect_to_database()
+        con = self.connect_to_database()  # Use the thread-local connection
         log_message(log_level='Debug',
                     message=f'Query: {query}',
                     context=None)
-        with self.con.cursor() as cursor:
+
+        with con.cursor() as cursor:
             cursor.execute(query)
             result = cursor.fetchall()
-        self.con.commit()
+
+        con.commit()
         cursor.close()
-        self.con.close()
-        if self.connected is True:
+
+        # Optionally close the connection if needed
+        # If you are using thread-local storage, closing it might not be necessary until after the task is complete
+        if not self.connected:
+            con.close()
+            thread_local.conn = None  # Reset the thread-local connection
             self.connected = False
+
         log_message(log_level='Debug',
                     message=f'table_exists_query_execution: {result[0][0]}',
                     context=None)
         return result[0][0]
 
-    def get_db_column_names(self, query, ordinal_postion_included: bool):
+    def get_db_column_names(self, query, ordinal_postion_included: bool) -> dict:
         """
         This method executes a specific Redshift SQL query to list the names of a specified table.
 
@@ -396,26 +496,32 @@ class RedshiftConnection:
         :param ordinal_postion_included: A boolean to signify whether the column names are ordered by their ordinal position
         :return: The ordered table column names
         """
-        if self.connected is False:
-            self.con = self.connect_to_database()
-        cursor = self.con.cursor()
+        con = self.connect_to_database()  # Use the thread-local connection
+        cursor = con.cursor()
         log_message(log_level='Debug',
                     message=f'Query: {query}',
                     context=None)
+
         cursor.execute(query)
-        column_names = set()
-        column_info = []
-        if not ordinal_postion_included:
-            column_names = set(col[0].strip('"') for col in cursor.fetchall())
-        else:
-            column_data = cursor.fetchall()
-            column_info = [(col[0].strip('"'), col[1]) for col in column_data]
-        self.con.commit()
+        fields_dict = {}
+
+        column_data = cursor.fetchall()
+
+        # Parse column names and lengths
+        for column_name, data_type, char_length in column_data:
+            # Ensure char_length is handled appropriately
+            if char_length is None:
+                char_length = math.nan
+            else:
+                char_length = int(char_length)
+            fields_dict[column_name] = (data_type, char_length)
+
+        # Close cursor and connection
+        con.commit()
         cursor.close()
-        self.con.close()
-        if self.connected is True:
+        if not self.connected:
+            con.close()
+            thread_local.conn = None  # Reset the thread-local connection
             self.connected = False
-        if ordinal_postion_included:
-            return column_info
-        else:
-            return column_names
+
+        return fields_dict

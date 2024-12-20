@@ -5,59 +5,62 @@ import math
 import tarfile
 import csv
 from io import BytesIO, StringIO
+from threading import Lock
 from typing import Dict, List, Any
 
 import boto3
 import pandas as pd
 from botocore.exceptions import ClientError
-from common.aws_utilities import start_batch_job, upload_large_file
+from common.aws_utilities import start_batch_job, upload_large_file, execute_in_threads, create_sql_str, update_table_name_that_starts_with_digit
 from common.integrationConfigClass import IntegrationConfigClass
 
 from common.log_message import log_message
-from common.redshiftManager import RedshiftManager, update_table_name_that_starts_with_digit
+from common.redshiftManager import RedshiftManager
 
 
 def load_data_into_redshift(schema_name: str, tables_to_load: Dict[str, str], starting_directory: str, s3_bucket: str,
                             extract_docs: bool, settings: IntegrationConfigClass, redshift_manager: RedshiftManager,
-                            secret: str):
+                            secret: str, extract_type: str):
     """
-    This method defines the S3 URI of the CSV files and retrieves the CSV headers in the order the columns in the file.
-
-    :param secret: The secret file name
-    :param redshift_manager: This is a class that manages Redshift connections.
-    :param extract_docs: A boolean that determines whether to extract document source content.
-    :param settings: This is a settings class that allows access to static variables in a specified Secrets Manager block.
-    :param schema_name: Name of the Redshift schema
-    :param tables_to_load: A dictionary that maps the table name to the related CSV file
-    :param starting_directory: The starting directory where the of where the direct data file is located
-    :param s3_bucket: The name of the S3 bucket that the direct data files is stored.
+    Loads data for multiple tables into Redshift in parallel.
     """
-    # List to store asynchronous tasks (if needed)
 
-    for table in tables_to_load:
-        csv_file = tables_to_load.get(table)
+    # Define the worker function for parallel loading
+    def load_table_data(table, csv_file):
         table_s3_uri = f"s3://{s3_bucket}/{starting_directory}/{csv_file}"
         table_name = table.split(".")[1]
 
         if table_name == 'document_version__sys' and extract_docs:
-            # Example of starting async task (if needed)
-            retrieve_document_source_content_async(s3_bucket, starting_directory, csv_file,
-                                                   settings)
+            # Retrieve document content asynchronously if needed
+            retrieve_document_source_content_async(s3_bucket, starting_directory, csv_file, settings, secret=secret)
 
         try:
-            # Load data into Redshift (assuming this operation is synchronous)
-            redshift_manager.load_full_data(schema_name=schema_name,
-                                            table_name=table_name.lower(),
-                                            s3_uri=table_s3_uri,
-                                            headers=get_csv_headers(s3_bucket, starting_directory, csv_file))
-
+            # Load data into Redshift for this specific table
+            redshift_manager.load_full_data(
+                schema_name=schema_name,
+                table_name=table_name.lower(),
+                s3_uri=table_s3_uri,
+                headers=get_csv_headers(s3_bucket, starting_directory, csv_file),
+                extract_type=extract_type
+            )
         except Exception as e:
-            # Handle any exceptions that occur during the execution of load_data_into_redshift
+            # Log and handle any exceptions that occur during the loading process
             log_message(log_level='Error',
                         message=f'Error loading {schema_name}.{table_name}',
                         exception=e,
                         context=None)
             raise e
+
+    # Prepare args list for loading table data
+    args_list = [
+        (table, csv_file) for table, csv_file in tables_to_load.items()
+    ]
+
+    # Execute loading table data in parallel
+    execute_in_threads(
+        task=load_table_data,
+        args_list=args_list
+    )
 
 
 def retrieve_document_source_content_async(bucket_name, starting_directory, csv_location, settings, secret):
@@ -236,11 +239,6 @@ def verify_redshift_tables(chunk_size: int, bucket_name: str, manifest_path: str
                     exception=e,
                     context=None)
         raise e
-
-    tables_to_load: Dict[str, str] = {}
-    tables_to_delete: Dict[str, str] = {}
-    tables_to_verify: List[str] = []
-    tables_to_create: List[str] = []
     # If this a full extract, the assumption is that the database is being established and the metadata table needs
     # to be created first.
     if extract_type == "full":
@@ -252,76 +250,122 @@ def verify_redshift_tables(chunk_size: int, bucket_name: str, manifest_path: str
                                         redshift_manager=redshift_manager,
                                         settings=settings)
 
-    # Process each chunked data from the manifest dataframe
-    for chunk in manifest_dataframe_itr:
-        for index, row in chunk.iterrows():
-            type = row["type"]
-            # Only process elements that have records present
-            record_count_not_zero = row["records"] > 0
-            full_table_name: str = row["extract"]
-            if extract_type == 'full' or record_count_not_zero:
-                file_path = row["file"]
-                table_name = full_table_name.split(".")[1].lower()
-                if table_name[0].isdigit():
-                    table_name = 'n_' + table_name
-                if not (extract_type == "full" and table_name == 'metadata'):
-                    # Check to see if the schema and table exists.
-                    if redshift_manager.redshift_table_exists(schema_name=schema_name, table_name=table_name,
-                                                              settings=settings):
-                        if record_count_not_zero:
-                            tables_to_verify.append(full_table_name)
-                    else:
-                        tables_to_create.append(full_table_name)
-                    if type == "updates":
-                        if record_count_not_zero:
-                            tables_to_load[full_table_name] = file_path
-                    elif type == 'deletes':
-                        tables_to_delete[full_table_name] = file_path
-                else:
-                    tables_to_load[full_table_name] = file_path
+    all_tables_to_verify = []
+    all_tables_to_create = []
+    all_tables_to_load = {}
+    all_tables_to_delete = {}
 
-    if len(tables_to_create) > 0:
+    for chunk in manifest_dataframe_itr:
+        tables_to_verify, tables_to_create, tables_to_load, tables_to_delete = process_chunk(chunk, extract_type,
+                                                                                             schema_name, settings,
+                                                                                             redshift_manager)
+
+        # Collect results from each chunk
+        all_tables_to_verify.extend(tables_to_verify)
+        all_tables_to_create.extend(tables_to_create)
+        all_tables_to_load.update(tables_to_load)
+        all_tables_to_delete.update(tables_to_delete)
+
+    if len(all_tables_to_create) > 0:
         log_message(log_level='Info',
                     message=f'Creating new tables',
                     context=None)
-        create_new_redshift_tables(table_names=tables_to_create,
+        create_new_redshift_tables(table_names=all_tables_to_create,
                                    schema_name=schema_name,
                                    metadata_dataframe=metadata_dataframe_itr,
                                    redshift_manager=redshift_manager)
-    if len(tables_to_verify) > 0:
+    if len(all_tables_to_verify) > 0:
         log_message(log_level='Info',
                     message=f'Updating existing tables',
                     context=None)
-        verify_and_update_existing_tables(table_names=tables_to_verify,
+        verify_and_update_existing_tables(table_names=all_tables_to_verify,
                                           metadata_dataframe=metadata_dataframe_itr,
                                           metadata_deletes_dataframe=metadata_deletes_dataframe_itr,
                                           schema_name=schema_name,
                                           redshift_manager=redshift_manager)
-    if len(tables_to_load) > 0:
+    if len(all_tables_to_delete) > 0:
+        log_message(log_level='Info',
+                    message=f'Deleting data from existing tables',
+                    context=None)
+        delete_data_from_redshift_table(schema_name=schema_name,
+                                        table_names=all_tables_to_delete,
+                                        starting_directory=starting_directory,
+                                        s3_bucket=bucket_name,
+                                        redshift_manager=redshift_manager,
+                                        settings=settings)
+    if len(all_tables_to_load) > 0:
         log_message(log_level='Info',
                     message=f'Loading data',
                     context=None)
         load_data_into_redshift(schema_name=schema_name,
-                                tables_to_load=tables_to_load,
+                                tables_to_load=all_tables_to_load,
                                 starting_directory=starting_directory,
                                 s3_bucket=bucket_name,
                                 extract_docs=extract_docs,
                                 settings=settings,
                                 redshift_manager=redshift_manager,
-                                secret=secret)
-    if len(tables_to_delete) > 0:
-        log_message(log_level='Info',
-                    message=f'Deleting data from existing tables',
-                    context=None)
-        delete_data_from_redshift_table(schema_name=schema_name,
-                                        table_names=tables_to_delete,
-                                        starting_directory=starting_directory,
-                                        s3_bucket=bucket_name,
-                                        redshift_manager=redshift_manager,
-                                        settings=settings)
+                                secret=secret,
+                                extract_type=extract_type)
 
 
-def create_or_update_metadata_table(schema_name: str, metadata_dataframe: pd.DataFrame, redshift_manager: RedshiftManager,
+def process_chunk(chunk, extract_type, schema_name, settings, redshift_manager):
+    tables_to_verify = []
+    tables_to_create = []
+    tables_to_load = {}
+    tables_to_delete = {}
+
+    # Lock to ensure thread-safe modification of shared resources
+    lock = Lock()
+
+    # Prepare the list of arguments for each row to be processed in parallel
+    args_list = [
+        (row, extract_type, schema_name, settings, redshift_manager,
+         tables_to_verify, tables_to_create, tables_to_load, tables_to_delete, lock)
+        for index, row in chunk.iterrows()
+    ]
+
+    # Use the execute_in_threads method to run the process_row function in parallel
+    execute_in_threads(process_row, args_list)
+
+    # Return the results after processing all rows
+    return tables_to_verify, tables_to_create, tables_to_load, tables_to_delete
+
+
+def process_row(row, extract_type, schema_name, settings, redshift_manager, tables_to_verify, tables_to_create,
+                tables_to_load, tables_to_delete, lock):
+    type = row["type"]
+    record_count_not_zero = row["records"] > 0
+    full_table_name = row["extract"]
+
+    if extract_type == 'full' or record_count_not_zero:
+        file_path = row["file"]
+        table_name = full_table_name.split(".")[1].lower()
+        if table_name[0].isdigit():
+            table_name = 'n_' + table_name
+        if not (extract_type == "full" and table_name == 'metadata'):
+            # Check if schema and table exists
+            table_exists = redshift_manager.redshift_table_exists(schema_name=schema_name, table_name=table_name,
+                                                                  settings=settings)
+
+            # Use a lock to ensure thread-safe modification of shared resources
+            with lock:
+                if table_exists:
+                    if record_count_not_zero:
+                        tables_to_verify.append(full_table_name)
+                else:
+                    tables_to_create.append(full_table_name)
+                if type == "updates":
+                    if record_count_not_zero:
+                        tables_to_load[full_table_name] = file_path
+                elif type == 'deletes':
+                    tables_to_delete[full_table_name] = file_path
+        else:
+            with lock:
+                tables_to_load[full_table_name] = file_path
+
+
+def create_or_update_metadata_table(schema_name: str, metadata_dataframe: pd.DataFrame,
+                                    redshift_manager: RedshiftManager,
                                     settings: IntegrationConfigClass):
     """
     This method creates or updates the Metadata table. First it checks to see if the table exists.
@@ -349,70 +393,79 @@ def create_or_update_metadata_table(schema_name: str, metadata_dataframe: pd.Dat
                                                column_types=create_sql_str(column_type_length, False))
 
 
-
 def verify_and_update_existing_tables(table_names: List[str], metadata_dataframe: pd.DataFrame,
                                       metadata_deletes_dataframe: pd.DataFrame, schema_name: str,
                                       redshift_manager: RedshiftManager):
     """
     This method verifies that the tables from the manifest files are listed in the metadata file.
     It then retrieves the columns listed in the metadata file, if the metadata_deletes file exists then it lists
-    the columns that need to be removed. The method then pass the list of new and
+    the columns that need to be removed. The method then passes the list of new and removed columns for updates.
+
     :param redshift_manager: This is a class that manages Redshift connections.
     :param table_names: A list of tables to verify and update
     :param metadata_dataframe: The metadata dataframe to parse
     :param metadata_deletes_dataframe: the metadata_deletes dataframe to parse
     :param schema_name: The name of the schema the tables are located in
-    :return:
     """
+
     log_message(log_level='Debug',
-                message=f'Start of updating the tables',
+                message=f'Start of updating the tables:',
                 exception=None,
                 context=None)
-    columns_to_add = {}
-    columns_to_remove = []
-    tables_dropped = []
 
     try:
-        log_message(log_level='Debug',
-                    message=f'Checking if metadata_deletes exists',
-                    exception=None,
-                    context=None)
+        # Drop tables if metadata_deletes exists
+        tables_dropped = []
         if metadata_deletes_dataframe is not None:
-            tables_dropped = drop_table_for_deleted_objects(schema_name, table_names, metadata_deletes_dataframe)
+            tables_dropped = drop_table_for_deleted_objects(schema_name, metadata_deletes_dataframe,
+                                                            redshift_manager=redshift_manager)
             log_message(log_level='Debug',
                         message=f'Tables dropped: {tables_dropped}',
                         exception=None,
                         context=None)
-        log_message(log_level='Debug',
-                    message=f'Iterating through all the tables',
-                    exception=None,
-                    context=None)
-        for table in table_names:
-            log_message(log_level='Debug',
-                        message=f'Checking if {table} is in the extract',
-                        exception=None,
-                        context=None)
+
+        if "Metadata.metadata" in table_names:
+            missing_tables = add_table_config_to_list(table_names, metadata_dataframe)
+            table_names.extend(missing_tables)
+
+        if "Metadata.metadata_deletes" in table_names:
+            missing_tables = add_table_config_to_list(table_names, metadata_deletes_dataframe)
+            table_names.extend(missing_tables)
+
+        def update_table_logic(table: str):
+            columns_to_add = {}
+            columns_to_remove = []
+
             if is_table_in_extract(metadata_dataframe, table):
-                # columns: List[str] = metadata_dataframe.loc[table, ["column_name"]]
-                columns_to_add: dict[Any, tuple[Any, Any]] = retrieve_table_columns_types_and_lengths(table,
-                                                                                                      metadata_dataframe)
-            log_message(log_level='Debug',
-                        message=f'Checking if metadata_deletes exists again',
-                        exception=None,
-                        context=None)
+                columns_to_add = retrieve_table_columns_types_and_lengths(table, metadata_dataframe)
+
             if metadata_deletes_dataframe is not None:
                 if len(tables_dropped) == 0 or table not in tables_dropped:
-                    columns_to_remove = retrieve_columns_to_drop(table, schema_name, metadata_deletes_dataframe)
+                    columns_to_drop_temp = retrieve_columns_to_drop(table, metadata_deletes_dataframe)
+                    if columns_to_drop_temp is not None:
+                        columns_to_remove.extend(columns_to_drop_temp)
 
-            if columns_to_remove:
+            if len(columns_to_remove) > 0 or len(columns_to_add) > 0:
                 log_message(log_level='Debug',
-                            message=f'Updating the tables',
+                            message=f'Updating table {table}',
                             exception=None,
                             context=None)
-                redshift_manager.redshift_update_table(schema_name=schema_name,
-                                                       table_name=table.split(".")[1].lower(),
-                                                       new_column_names=columns_to_add,
-                                                       columns_to_drop=set(columns_to_remove))
+                redshift_manager.redshift_update_table(
+                    schema_name=schema_name,
+                    table_name=table,
+                    new_column_names=columns_to_add,
+                    columns_to_drop=set(columns_to_remove),
+                )
+
+        # Prepare arguments for threading logic
+        args_list = [(table,) for table in table_names]
+
+        # Execute in parallel
+        execute_in_threads(
+            task=update_table_logic,
+            args_list=args_list
+        )
+
     except Exception as e:
         log_message(log_level='Error',
                     message=f'There was an issue updating the tables.',
@@ -421,35 +474,57 @@ def verify_and_update_existing_tables(table_names: List[str], metadata_dataframe
         raise e
 
 
+def add_table_config_to_list(table_names: List[str], dataframe: pd.DataFrame):
+    extract_names = dataframe['extract'].tolist()
+    tables_in_metadata = [value.split('.')[-1] for value in extract_names if isinstance(value, str)]
+    missing_tables = set(tables_in_metadata) - set(table_names)
+    return missing_tables
+
+
 def create_new_redshift_tables(table_names: List[str], schema_name: str, metadata_dataframe: pd.DataFrame,
                                redshift_manager: RedshiftManager):
     """
-    This method creates new Redshift tables.
+    This method creates new Redshift tables in parallel.
     Once the tables are created,
     it alters those same tables to define foreign keys based on the related extract column in the metadata file.
 
+    :param redshift_manager:
     :param table_names: A list of tables to create
     :param schema_name: The name of the schema where the tables are to be created
     :param metadata_dataframe: The metadata data frame to parse
     """
-    relation_alter_table_and_columns: dict[str, dict[str, str]] = {}
 
-    for table in table_names:
-        creation_columns = retrieve_table_columns_types_and_lengths(table, metadata_dataframe)
+    def create_table(table_name: str):
+        """Function to create a single table."""
+        table_name_lower = table_name.split(".")[1].lower()
+        creation_columns = retrieve_table_columns_types_and_lengths(table_name_lower, metadata_dataframe)
 
-        relation_alter_table_and_columns[table] = retrieve_table_reference_columns(table, metadata_dataframe)
+        is_picklist = table_name == 'Picklist.picklist__sys'
+        column_types = create_sql_str(creation_columns, is_picklist)
 
-        if not table == 'Picklist.picklist__sys':
-            redshift_manager.create_redshift_table(schema_name=schema_name,
-                                                   table_name=table.split(".")[1].lower(),
-                                                   column_types=create_sql_str(creation_columns, False))
-        else:
-            redshift_manager.create_redshift_table(schema_name=schema_name,
-                                                   table_name=table.split(".")[1].lower(),
-                                                   column_types=create_sql_str(creation_columns, True))
+        try:
+            redshift_manager.create_redshift_table(
+                schema_name=schema_name,
+                table_name=table_name_lower,
+                column_types=column_types,
+            )
+            log_message(log_level='Info',
+                        message=f'Table {schema_name}.{table_name_lower} created successfully.')
+        except Exception as e:
+            log_message(log_level='Error',
+                        message=f'Failed to create table {schema_name}.{table_name_lower}',
+                        exception=e,
+                        context=None)
+            raise e
 
-    update_reference_columns(table_to_column_dict=relation_alter_table_and_columns,
-                             schema_name=schema_name, redshift_manager=redshift_manager)
+    # Prepare the arguments for the threading logic
+    args_list = [(table,) for table in table_names]
+
+    # Execute the table creation in parallel
+    execute_in_threads(
+        task=create_table,
+        args_list=args_list
+    )
 
 
 def drop_table_for_deleted_objects(schema_name: str, metadata_deletes_dataframe: pd.DataFrame,
@@ -488,8 +563,17 @@ def retrieve_columns_to_drop(table: str, metadata_deletes_dataframe: pd.DataFram
     """
     try:
         if is_table_in_extract(metadata_deletes_dataframe, table):
-            creation_filtered_rows = metadata_deletes_dataframe[metadata_deletes_dataframe['extract'] == table]
-            return creation_filtered_rows['column_name'].values
+
+            metadata_deletes_dataframe['table_name'] = metadata_deletes_dataframe['extract'].str.split('.').str[-1]
+
+            # Normalize the table name and extracted values for comparison
+            table = table.strip().lower()
+            metadata_deletes_dataframe['table_name'] = metadata_deletes_dataframe['table_name'].str.strip().str.lower()
+
+            # Filter rows matching the table name
+            filtered_rows = metadata_deletes_dataframe[metadata_deletes_dataframe['table_name'] == table]
+
+            return filtered_rows['column_name'].values
     except Exception as e:
         raise e
 
@@ -503,13 +587,41 @@ def retrieve_table_columns_types_and_lengths(table: str, metadata_dataframe: pd.
     :return: A dictionary mapping the columns to the data type and length
     """
     try:
-        creation_filtered_rows = metadata_dataframe[metadata_dataframe['extract'] == table]
-        columns_and_types_array = creation_filtered_rows[['column_name', 'type', 'length']].values
+        # Extract the part of 'extract' after the last '.'
+        metadata_dataframe['table_name'] = metadata_dataframe['extract'].str.split('.').str[-1]
+
+        # Normalize the table name and extracted values for comparison
+        table = table.strip().lower()
+        metadata_dataframe['table_name'] = metadata_dataframe['table_name'].str.strip().str.lower()
+
+        # Filter rows matching the table name
+        filtered_rows = metadata_dataframe[metadata_dataframe['table_name'] == table]
+
+        # Log if no rows match
+        if filtered_rows.empty:
+            log_message(log_level='Warning',
+                        message=f"No matching rows found for table '{table}' in metadata.",
+                        context=None)
+            return {}
+
+        # Extract column_name, type, and length
+        columns_and_types_array = filtered_rows[['column_name', 'type', 'length']].values
+
+        # Handle the length column: Convert string representation of int to actual int, if not NaN
+        for i in range(len(columns_and_types_array)):
+            length = columns_and_types_array[i, 2]
+            if pd.notnull(length):  # Check if length is not NaN
+                try:
+                    # Convert the string to an integer
+                    columns_and_types_array[i, 2] = int(length)
+                except ValueError:
+                    raise ValueError(f"Invalid length value: {length} at row {i}")
+
+        # Return a dictionary mapping column_name to (type, length)
+        return dict(zip(columns_and_types_array[:, 0],
+                        zip(columns_and_types_array[:, 1], columns_and_types_array[:, 2])))
     except Exception as e:
         raise e
-
-    return dict(zip(columns_and_types_array[:, 0],
-                    zip(columns_and_types_array[:, 1], columns_and_types_array[:, 2])))
 
 
 def retrieve_table_reference_columns(table: str, metadata_dataframe: pd.DataFrame):
@@ -534,47 +646,46 @@ def retrieve_table_reference_columns(table: str, metadata_dataframe: pd.DataFram
     return dict(zip(columns_and_references_array[:, 0], columns_and_references_array[:, 1]))
 
 
-def update_reference_columns(table_to_column_dict: dict[str, dict[str, str]], schema_name: str,
-                             redshift_manager: RedshiftManager):
-    """
-    This method loops through the input dictionary and if the reference columns exists,
-    a foreign key is added to the table.
-    :param redshift_manager: This is a class that manages Redshift connections.
-    :param table_to_column_dict: This is a mapping of what tables and their references
-    :param schema_name: The name of the schema of the database
-    :return:
-    """
-    for table, column_and_references in table_to_column_dict.items():
-        if bool(column_and_references):
-            redshift_manager.add_foreign_key_constraint(schema_name=schema_name,
-                                                        table_name=table.split(".")[1],
-                                                        columns_and_references=column_and_references)
-
-
 def delete_data_from_redshift_table(schema_name: str, table_names: Dict[str, str], starting_directory: str,
                                     s3_bucket: str, redshift_manager: RedshiftManager,
                                     settings: IntegrationConfigClass):
     """
-    This method iterates through each table ame and determines the S3 bucket location of the CSV file of the data to delete
-    from the table.
-    :param settings: This is the settings class to get static values for each secret specified
+    This method iterates through each table name and determines the S3 bucket location of the CSV file of the data to delete
+    from the table, then deletes the data in parallel.
+
+    :param settings: This is the settings class to get static values for each secret specified.
     :param redshift_manager: This is a class that manages Redshift connections.
-    :param schema_name: The name of the schema where the table resides
-    :param table_names: A dictionary that maps the table to the CSV file location and name
-    :param starting_directory: The starting directory of the Direct Data file
-    :param s3_bucket: The name of the S3 bucket the direct data files are stored
+    :param schema_name: The name of the schema where the table resides.
+    :param table_names: A dictionary that maps the table to the CSV file location and name.
+    :param starting_directory: The starting directory of the Direct Data file.
+    :param s3_bucket: The name of the S3 bucket the direct data files are stored in.
     """
+
+    def delete_data_logic(table: str, file: str):
+        """
+        Logic to delete data from a specific table.
+        :param table: The table name.
+        :param file: The CSV file name.
+        """
+        if redshift_manager.redshift_table_exists(schema_name=schema_name, table_name=table.split(".")[1].lower(),
+                                                  settings=settings):
+            table_s3_uri = f"s3://{s3_bucket}/{starting_directory}/{file}"
+            log_message(log_level='Debug',
+                        message=f'Delete file: {table_s3_uri} for table: {table}',
+                        context=None)
+            redshift_manager.delete_data(schema_name=schema_name,
+                                         table_name=table.split(".")[1].lower(),
+                                         s3_file_uri=table_s3_uri)
+
+    # Prepare arguments for threading
+    args_list = [(table, file) for table, file in table_names.items()]
+
     try:
-        for table, file in table_names.items():
-            if redshift_manager.redshift_table_exists(schema_name=schema_name, table_name=table.split(".")[1].lower(),
-                                                      settings=settings):
-                table_s3_uri = f"s3://{s3_bucket}/{starting_directory}/{file}"
-                log_message(log_level='Debug',
-                            message=f'Delete file: {table_s3_uri} for table: {table}',
-                            context=None)
-                redshift_manager.delete_data(schema_name=schema_name,
-                                             table_name=table.split(".")[1].lower(),
-                                             s3_file_uri=table_s3_uri)
+        # Execute in parallel
+        execute_in_threads(
+            task=delete_data_logic,
+            args_list=args_list
+        )
     except Exception as e:
         log_message(log_level='Error',
                     message=f'Error encountered when attempting to delete data',
@@ -590,60 +701,10 @@ def is_table_in_extract(metadata_dataframe: pd.DataFrame, table_name: str):
     :param table_name: The name of the table that needs to be verified
     :return: A boolean that signifies whether the tables is in the extracted Direct Data file
     """
-    return table_name in metadata_dataframe['extract'].values
+    tables_in_metadata = [value.split('.')[-1] for value in metadata_dataframe['extract'].tolist() if
+                          isinstance(value, str)]
+    return table_name in tables_in_metadata
 
-
-def create_sql_str(fields_dict: dict[str, tuple[str, int]], is_picklist: bool) -> str:
-    """
-    This method ingests a dictionary that maps a column name to the data type and the length of the string limit (if a string),
-    and generates a part of a SQL string that will defines the column of a table when it is created.
-    This adds additional constraints for the picklist table.
-    :param fields_dict: A dictionary that maps columns to data types and string lengths
-    :param is_picklist: A boolean that signifies if the table being created is the picklist table
-    :return: A partial SQL string for the column creation
-    """
-    sql_str = ''
-
-    for k, v in fields_dict.items():
-        if isinstance(v, tuple):
-            data_type_tuple = v
-        else:
-            data_type_tuple = tuple[v]
-
-        data_type = data_type_tuple[0].lower()
-        data_type_length = data_type_tuple[1]
-
-        if math.isnan(data_type_length) or not data_type_length or data_type_length == "":
-            data_type_length = 32000
-        else:
-            data_type_length = int(data_type_length) * 2
-
-        k = update_table_name_that_starts_with_digit(k)
-
-        if data_type == "id" or (k.lower() == 'id' and data_type == 'string'):
-            sql_str += f'"{k}" VARCHAR({data_type_length}) PRIMARY KEY, '
-        elif data_type == "datetime":
-            sql_str += f'"{k}" TIMESTAMPTZ, '
-        elif data_type == "boolean":
-            sql_str += f'"{k}" BOOLEAN, '
-        elif data_type == "number":
-            sql_str += f'"{k}" NUMERIC'
-            if k.lower() == "id":
-                sql_str += f' PRIMARY KEY, '
-            else:
-                sql_str += f', '
-        elif data_type == "date":
-            sql_str += f'"{k}" DATE, '
-        else:
-            # This logic to handle icon fields.
-            if data_type == 'string' and data_type_length == 2:
-                data_type_length = 64000
-            sql_str += f'"{k}" VARCHAR({data_type_length}), '
-
-    if is_picklist:
-        sql_str += 'CONSTRAINT picklist_primary_key PRIMARY KEY (object, object_field, picklist_value_name), '
-    sql_str = sql_str[:-2]
-    return sql_str
 
 
 def unzip_direct_data_files(bucket_name: str, source_zipped_file_path: str, target_filepath: str) -> bool:

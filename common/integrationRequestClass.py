@@ -71,7 +71,6 @@ class IntegrationRequestClass:
         """
 
         # data = self.event.get('data', {})
-        print(self.event)
         self.step = self.event.get('step')
         self.extract_type = self.event.get('extract_type')
         self.start_time = self.event.get('start_time')

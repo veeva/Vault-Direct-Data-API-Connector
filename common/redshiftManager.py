@@ -1,21 +1,9 @@
+import math
 from typing import Any
 
 from .integrationConfigClass import IntegrationConfigClass
-from .aws_utilities import RedshiftConnection
+from .aws_utilities import RedshiftConnection, create_sql_str, update_table_name_that_starts_with_digit
 from .log_message import log_message
-
-
-def update_table_name_that_starts_with_digit(table_name: str) -> str:
-    """
-    This method handles reconciling Vault objects that begin with a number and appending a 'n_' so that Redshift will
-    accept the nameing convention
-    :param table_name: The name of the table that needs to be update
-    :return: The updated table name
-    """
-    if table_name[0].isdigit():
-        return f'n_{table_name}'
-    else:
-        return table_name
 
 
 class RedshiftManager:
@@ -115,7 +103,11 @@ class RedshiftManager:
                     context=None)
         try:
 
-            create_query = f"CREATE TABLE {schema_name}.{table_name} ({column_types})"
+            create_query = f"CREATE TABLE {schema_name}.{table_name} ({column_types}"
+            if table_name == 'metadata':
+                create_query += f", PRIMARY KEY (extract, column_name))"
+            else:
+                create_query += ")"
             self.redshift_conn.run_query(create_query, False)
         except Exception as e:
             log_message(log_level='Error',
@@ -180,9 +172,9 @@ class RedshiftManager:
     def redshift_update_table(self, schema_name: str, table_name: str, new_column_names: dict[Any, tuple[Any, Any]],
                               columns_to_drop: set[str]) -> bool:
         """
-        This method retrieves the current cloumns of a table and compares those to either a list of newly added columns or columns
+        This method retrieves the current columns of a table and compares those to either a list of newly added columns or columns
         that should be dropped and updates the table appropriately
-        :param schema_name: The name of the schema where the talbe is located
+        :param schema_name: The name of the schema where the table is located
         :param table_name: The name of the table to be updated
         :param new_column_names: A dictionary that maps the new columns to the data types and length of string
         :param columns_to_drop: A set of columns that should be dropped from an existing table
@@ -190,7 +182,7 @@ class RedshiftManager:
 
         table_name = update_table_name_that_starts_with_digit(table_name)
         query = f"""
-            SELECT column_name
+            SELECT column_name, data_type, character_maximum_length
             FROM information_schema.columns
             WHERE
             table_catalog = '{self.dbname}' 
@@ -199,25 +191,58 @@ class RedshiftManager:
         """
         redshift_table_name = f"{schema_name}.{table_name}"
         try:
-            current_columns = self.redshift_conn.get_db_column_names(query, False)
+            if len(columns_to_drop) > 0:
+                self.redshift_drop_columns_from_table(redshift_table_name, columns_to_drop)
+
+            current_column_dict = self.redshift_conn.get_db_column_names(query, False)
+            current_columns = set(current_column_dict.keys())
             new_columns = set(new_column_names.keys())
             added_columns = new_columns - current_columns
-            removed_columns = set()
-            if columns_to_drop is not None:
-                removed_columns = columns_to_drop
-            if current_columns == new_columns:
-                log_message(log_level='Info',
-                            message=f'No columns to update for table {redshift_table_name}',
-                            context=None)
-                return True
+            if current_columns == new_columns or current_columns.intersection(new_columns):
+                column_lengths_have_changed = False
+                for new_column, (new_data_type, new_column_length) in new_column_names.items():
+                    # Get the current column length
+                    current_column_length = current_column_dict[new_column][1]
+
+                    # Helper function to convert a value to an integer if it's valid
+                    def to_int(value):
+                        if value is None or value == "" or (isinstance(value, float) and math.isnan(value)):
+                            return None
+                        try:
+                            return int(value)
+                        except (ValueError, TypeError):
+                            return None
+
+                    # Convert both current and new column lengths to integers, ignore if invalid
+                    current_column_length_int = to_int(current_column_length)
+                    new_column_length_int = to_int(new_column_length)
+
+                    # Skip iteration if either column length is invalid
+                    if current_column_length_int is None or new_column_length_int is None:
+                        continue
+
+                    # Apply the scaling factor
+                    new_column_length_int *= 2
+
+                    # Compare the lengths and update if needed
+                    if current_column_length_int < new_column_length_int:
+                        current_column_dict[new_column] = (current_column_dict[new_column][0], str(new_column_length_int))
+                        column_lengths_have_changed = True
+
+                if column_lengths_have_changed:
+                    self.update_column_lengths(redshift_table_name, ', '.join(current_column_dict.keys()),
+                                               create_sql_str(current_column_dict, False))
+                else:
+                    log_message(log_level='Info',
+                                message=f'No columns to update for table {redshift_table_name}',
+                                context=None)
+
             else:
-                redshift_table_name = f"{schema_name}"
                 if len(added_columns) > 0:
                     self.redshift_add_columns_to_table(redshift_table_name,
                                                        {column: new_column_names[column] for column in added_columns})
-                if len(removed_columns) > 0:
-                    self.redshift_drop_columns_from_table(redshift_table_name, removed_columns)
-                return True
+
+            return True
         except Exception as e:
             log_message(log_level='Error',
                         message=f'Error updating table {redshift_table_name}',
@@ -235,6 +260,17 @@ class RedshiftManager:
         for column, (data_type, length) in columns.items():
             column = update_table_name_that_starts_with_digit(column)
             column_name = ''
+            data_type = data_type.lower()
+
+            if length is None or length == "" or (isinstance(length, float) and math.isnan(length)):
+                length = 64000
+            else:
+                length = int(length)
+                if length > 32000:
+                    length = 64000
+                else:
+                    length *= 2
+
             if data_type == "id" or (column.lower() == 'id' and data_type == 'string'):
                 column_name += f'"{column}" VARCHAR({length}) PRIMARY KEY, '
             elif data_type == "datetime":
@@ -254,40 +290,120 @@ class RedshiftManager:
         query = query.rstrip(", \n") + ";"
         self.redshift_conn.run_query(query, False)
 
-    def load_full_data(self, schema_name: str, table_name: str, s3_uri, headers):
+    def update_column_lengths(self, schema_table_name: str, column_names: str, column_partial_query: str):
+
+        temp_table_name = f"{self.dbname}.{schema_table_name}_temp"
+
+        create_table_query = f"""
+        CREATE TABLE {temp_table_name} ({column_partial_query}) 
         """
-        This loads a specified CSV file into a specified table
-        :param schema_name: The name of the schema where the table is located
-        :param table_name: The name of the table where the data is to be loaded
-        :param s3_uri: The URI of the CSV in the S3
-        :param headers: A string of ordered headers from the CSV
+
+        insert_data_into_temp_table_query = f"""
+            INSERT INTO {temp_table_name}({column_names})
+            SELECT {column_names}
+            FROM {self.dbname}.{schema_table_name}
+        """
+
+        drop_existing_table_query = f"""DROP TABLE {schema_table_name}"""
+
+        change_temp_table_name_query = f"""ALTER TABLE {temp_table_name} RENAME TO {schema_table_name.split(".")[1]}"""
+
+        self.redshift_conn.run_query(create_table_query, True)
+        self.redshift_conn.run_query(insert_data_into_temp_table_query, True)
+        self.redshift_conn.run_query(drop_existing_table_query, True)
+        self.redshift_conn.run_query(change_temp_table_name_query, False)
+
+    def load_full_data(self, schema_name: str, table_name: str, s3_uri: str, headers: str, extract_type: str):
+        """
+        This loads a specified CSV file into a specified table without duplicates.
+        :param extract_type: The type of extract operation (e.g., 'full', 'incremental').
+        :param schema_name: The name of the schema where the table is located.
+        :param table_name: The name of the table where the data is to be loaded.
+        :param s3_uri: The URI of the CSV in the S3.
+        :param headers: A string of ordered headers from the CSV.
         """
 
         table_name = update_table_name_that_starts_with_digit(table_name)
-        if not s3_uri is None:
+        if s3_uri is not None:
             log_message(log_level='Info',
                         message=f'Table to be loaded: {schema_name}.{table_name}',
                         context=None)
-            query = f"COPY {self.dbname}.{schema_name}.{table_name} ({headers}) FROM '{s3_uri}' " \
-                    f"IAM_ROLE '{self.iam_role}' " \
-                    f"FORMAT AS CSV " \
-                    f"QUOTE '\"' " \
-                    f"IGNOREHEADER 1 " \
-                    f"TIMEFORMAT 'auto' " \
-                    f"ACCEPTINVCHARS " \
-                    f"FILLRECORD " \
-                    f"TRUNCATECOLUMNS" \
+
+            if extract_type == 'full':
+                query = (
+                    f"COPY {self.dbname}.{schema_name}.{table_name} ({headers}) FROM '{s3_uri}' "
+                    f"IAM_ROLE '{self.iam_role}' "
+                    f"FORMAT AS CSV "
+                    f"QUOTE '\"' "
+                    f"IGNOREHEADER 1 "
+                    f"TIMEFORMAT 'auto' "
+                    f"ACCEPTINVCHARS "
+                    f"FILLRECORD "
+                    f"TRUNCATECOLUMNS;"
+                )
+
+                try:
+                    self.redshift_conn.run_query(query, False)
+                    return True
+                except Exception as e:
+                    log_message(log_level='Error',
+                                message=f'Error loading {schema_name}.{table_name}',
+                                exception=e,
+                                context=None)
+                    raise e
+
+            else:
+                # Retrieve primary key columns
+                primary_keys = []
+                if table_name == 'metadata':
+                    primary_keys = ["extract", "column_name"]
+                elif table_name == 'picklist__sys':
+                    primary_keys = ["object", "object_field", "picklist_value_name"]
+                else:
+                    primary_keys = ["id"]
+
+                # Load into a temporary staging table
+                staging_table_name = f"{table_name}_staging"
+                pk_condition = " AND ".join(
+                    [f"{schema_name}.{table_name}.{col} = {staging_table_name}.{col}" for col in primary_keys])
+
+            copy_query = f"""
+                    CREATE TEMP TABLE {staging_table_name} (LIKE {schema_name}.{table_name});
+                    COPY {staging_table_name} ({headers}) FROM '{s3_uri}'
+                    IAM_ROLE '{self.iam_role}'
+                    FORMAT AS CSV
+                    QUOTE '\"'
+                    IGNOREHEADER 1
+                    TIMEFORMAT 'auto'
+                    ACCEPTINVCHARS
+                    FILLRECORD
+                    TRUNCATECOLUMNS;
+                """
+
+            delete_duplicates_query = f"""
+                    DELETE FROM {schema_name}.{table_name}
+                    USING {staging_table_name}
+                    WHERE {pk_condition};
+                """
+
+            insert_query = f"""
+                    INSERT INTO {schema_name}.{table_name}
+                    SELECT DISTINCT * FROM {staging_table_name};
+                """
 
             try:
-                self.redshift_conn.run_query(query, False)
+                # Run the queries in sequence
+                self.redshift_conn.run_query(copy_query, True)
+                self.redshift_conn.run_query(delete_duplicates_query, True)
+                self.redshift_conn.run_query(insert_query, False)
                 return True
             except Exception as e:
-
                 log_message(log_level='Error',
-                            message=f'Error loading{schema_name}.{table_name}',
+                            message=f'Error loading {schema_name}.{table_name}',
                             exception=e,
                             context=None)
                 raise e
+
         else:
             log_message(log_level='Info',
                         message=f'Load operation for {schema_name}.{table_name} is skipped',

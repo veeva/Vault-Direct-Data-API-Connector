@@ -405,8 +405,8 @@
                     },
                   "ResourceRequirements":
                     [
-                      { "value": "4.0", "type": "VCPU" },
-                      { "value": "30720", "type": "MEMORY" },
+                      { "Value": "4.0", "Type": "VCPU" },
+                      { "Value": "30720", "Type": "MEMORY" },
                     ],
                   "RuntimePlatform":
                     {

@@ -19,6 +19,7 @@ from common.api.model.response.direct_data_response import DirectDataResponse
 
 def main():
     current_region = get_batch_region()
+    has_failures = False
     log_message(log_level='Info',
                 message=f'Current region of batch job: {current_region}',
                 context=None)
@@ -57,96 +58,110 @@ def main():
     job_definition = settings.config.get(secret, 'job_definition')
 
     if step == "retrieve":
-        start_time = os.environ.get("START_TIME")
-        stop_time = os.environ.get("STOP_TIME")
-        log_message(log_level='Info',
-                    message=f'Listing Direct Data files with start time: {start_time} and stop time: {stop_time}',
-                    context=None)
-        # List the the Direct Data files of the specified extract type and time window
-        list_of_direct_data_files_response: DirectDataResponse = list_direct_data_files(start_time=str(start_time),
-                                                                                        stop_time=str(stop_time),
-                                                                                        extract_type=f'{extract_type}_directdata',
-                                                                                        secret=secret,
-                                                                                        settings=settings)
-
-        # If the file listing was successful and the response is not empty, download the latest Direct Data file in
-        # the response.
-        if list_of_direct_data_files_response.is_successful() and bool(list_of_direct_data_files_response.data):
-            direct_data_item = list_of_direct_data_files_response.data[-1]
-            file_path_name = direct_data_item.name
-            file_name = direct_data_item.filename
-            retrieval_success = retrieve_direct_data_files(list_files_response=list_of_direct_data_files_response,
-                                                           bucket_name=s3_bucket,
-                                                           starting_directory=f'{s3_directory}/{file_name}',
-                                                           secret_name=secret,
-                                                           settings=settings)
-
-            log_message(log_level='Debug',
-                        message=f'Retrieval Success: {retrieval_success}',
+        try:
+            start_time = os.environ.get("START_TIME")
+            stop_time = os.environ.get("STOP_TIME")
+            log_message(log_level='Info',
+                        message=f'Listing Direct Data files with start time: {start_time} and stop time: {stop_time}',
                         context=None)
+            # List the the Direct Data files of the specified extract type and time window
+            list_of_direct_data_files_response: DirectDataResponse = list_direct_data_files(start_time=str(start_time),
+                                                                                            stop_time=str(stop_time),
+                                                                                            extract_type=f'{extract_type}_directdata',
+                                                                                            secret=secret,
+                                                                                            settings=settings)
 
-            log_message(log_level='Debug',
-                        message=f'Continue Processing: {continue_processing}',
+            # If the file listing was successful and the response is not empty, download the latest Direct Data file in
+            # the response.
+            if list_of_direct_data_files_response.is_successful() and bool(list_of_direct_data_files_response.data):
+                direct_data_item = list_of_direct_data_files_response.data[-1]
+                file_path_name = direct_data_item.name
+                file_name = direct_data_item.filename
+                retrieval_success = retrieve_direct_data_files(list_files_response=list_of_direct_data_files_response,
+                                                               bucket_name=s3_bucket,
+                                                               starting_directory=f'{s3_directory}/{file_name}',
+                                                               secret_name=secret,
+                                                               settings=settings)
+
+                log_message(log_level='Debug',
+                            message=f'Retrieval Success: {retrieval_success}',
+                            context=None)
+
+                log_message(log_level='Debug',
+                            message=f'Continue Processing: {continue_processing}',
+                            context=None)
+
+                log_message(log_level='Debug',
+                            message=f'Both: {retrieval_success and continue_processing}',
+                            context=None)
+
+                if retrieval_success and continue_processing:
+                    function_name = settings.config.get(secret, 'lambda_function_name')
+
+                    payload: Dict[str, str] = {'step': 'unzip',
+                                               'source_filepath': f'{s3_directory}/{file_name}',
+                                               'target_directory': f'{s3_directory}/{file_path_name}',
+                                               'extract_type': f'{extract_type}',
+                                               'continue_processing': f'{continue_processing}',
+                                               'secret': f'{secret}'}
+
+                    invoke_lambda(function_name=function_name, payload=json.dumps(payload))
+
+                    log_message(log_level='Info',
+                                message=f'Invoking {function_name} with unzip step',
+                                context=None)
+        except Exception as e:
+            log_message(log_level='Error',
+                        message=f'Errors encountered when retrieving Direct Data files',
+                        exception=e,
                         context=None)
+            has_failures = True
 
-            log_message(log_level='Debug',
-                        message=f'Both: {retrieval_success and continue_processing}',
+    elif step == "unzip":
+        try:
+            source_filepath = os.environ.get("SOURCE_FILEPATH")
+            target_directory = os.environ.get("TARGET_DIRECTORY")
+            log_message(log_level='Info',
+                        message=f'Unzipping {source_filepath} to {target_directory}',
                         context=None)
+            successful_unzip = unzip_direct_data_files(bucket_name=s3_bucket,
+                                                       source_zipped_file_path=source_filepath,
+                                                       target_filepath=f'{target_directory}/')
 
-            if retrieval_success and continue_processing:
+            if successful_unzip and continue_processing:
                 function_name = settings.config.get(secret, 'lambda_function_name')
-
-                payload: Dict[str, str] = {'step': 'unzip',
-                                           'source_filepath': f'{s3_directory}/{file_name}',
-                                           'target_directory': f'{s3_directory}/{file_path_name}',
+                payload: Dict[str, str] = {'step': 'load_data',
+                                           'source_filepath': f'{target_directory}',
                                            'extract_type': f'{extract_type}',
-                                           'continue_processing': f'{continue_processing}',
                                            'secret': f'{secret}'}
 
                 invoke_lambda(function_name=function_name, payload=json.dumps(payload))
-
                 log_message(log_level='Info',
-                            message=f'Invoking {function_name} with unzip step',
+                            message=f'Invoking AWS Lambda {function_name} to load the data into Redshift',
                             context=None)
-
-    elif step == "unzip":
-        source_filepath = os.environ.get("SOURCE_FILEPATH")
-        target_directory = os.environ.get("TARGET_DIRECTORY")
-        log_message(log_level='Info',
-                    message=f'Unzipping {source_filepath} to {target_directory}',
-                    context=None)
-        successful_unzip = unzip_direct_data_files(bucket_name=s3_bucket,
-                                                   source_zipped_file_path=source_filepath,
-                                                   target_filepath=f'{target_directory}/')
-
-        if successful_unzip and continue_processing:
-            function_name = settings.config.get(secret, 'lambda_function_name')
-            payload: Dict[str, str] = {'step': 'load_data',
-                                       'source_filepath': f'{target_directory}',
-                                       'extract_type': f'{extract_type}',
-                                       'secret': f'{secret}'}
-
-            invoke_lambda(function_name=function_name, payload=json.dumps(payload))
-            log_message(log_level='Info',
-                        message=f'Invoking AWS Lambda {function_name} to load the data into Redshift',
+        except Exception as e:
+            log_message(log_level='Error',
+                        message=f'Errors encountered when unzipping direct data files',
+                        exception=e,
                         context=None)
+            has_failures = True
 
     elif step == "load_data":
-
-        source_filepath = os.environ.get("SOURCE_FILEPATH")
-        extract_source_content = os.environ.get("EXTRACT_SOURCE_CONTENT", "false").lower() == "true"
-
-        if extract_source_content is None:
-            extract_source_content = False
-
-        log_message(log_level='Debug',
-                    message=f'Source filepath: {source_filepath} and Extract Source content is {extract_source_content}',
-                    context=None)
-
-        # Generate the schema name with the given Vault ID from the Direct Data filename
-        vault_id = source_filepath.split("/")[-1].split("-")[0]
-        schema_name = f'vault_{vault_id}'
         try:
+
+            source_filepath = os.environ.get("SOURCE_FILEPATH")
+            extract_source_content = os.environ.get("EXTRACT_SOURCE_CONTENT", "false").lower() == "true"
+
+            if extract_source_content is None:
+                extract_source_content = False
+
+            log_message(log_level='Debug',
+                        message=f'Source filepath: {source_filepath} and Extract Source content is {extract_source_content}',
+                        context=None)
+
+            # Generate the schema name with the given Vault ID from the Direct Data filename
+            vault_id = source_filepath.split("/")[-1].split("-")[0]
+            schema_name = f'vault_{vault_id}'
             # Get the S3 filepath of the manifest.csv file
             manifest_filepath = get_s3_path("manifest", s3_bucket, source_filepath)
             log_message(log_level='Debug',
@@ -162,12 +177,6 @@ def main():
                         context=None)
             # Get the S3 filepath of the metadata_deletes.csv file. This only exists in incremental extracts.
             metadata_deletes_filepath = get_s3_path("metadata_deletes.csv", s3_bucket, source_filepath)
-        except Exception as e:
-            log_message(log_level='Info',
-                        message=f'Errors encountered when search for files in S3',
-                        exception=e,
-                        context=None)
-        try:
             # Verify and subsequently load the Direct Data into the specified Redshift database that is specified in
             # the Secrets Manager.
             verify_redshift_tables(chunk_size=500,
@@ -187,16 +196,18 @@ def main():
                         context=None)
 
         except Exception as e:
-            log_message(log_level='Info',
+            log_message(log_level='Error',
                         message=f'Errors encountered when attempting to load the data',
                         exception=e,
                         context=None)
+            has_failures = True
 
     elif step == "extract_docs":
-        doc_version_id_filepath = os.environ.get("DOC_VERSION_IDS")
-        starting_directory: str = os.environ.get("SOURCE_FILEPATH")
-        if check_file_exists_s3(bucket_name=s3_bucket, file_key=doc_version_id_filepath[5:].split("/", 1)[1]):
-            try:
+        try:
+            doc_version_id_filepath = os.environ.get("DOC_VERSION_IDS")
+            starting_directory: str = os.environ.get("SOURCE_FILEPATH")
+            if check_file_exists_s3(bucket_name=s3_bucket, file_key=doc_version_id_filepath[5:].split("/", 1)[1]):
+
                 doc_version_ids = retrieve_doc_version_ids_from_s3(doc_version_id_filepath)
 
                 log_message(log_level='Info',
@@ -221,34 +232,44 @@ def main():
                                 message=f'Error encountered when attempting to export documents',
                                 exception=Exception(export_documents_response.errors[0].message),
                                 context=None)
-                    raise Exception(export_documents_response.errors[0].message)
-            except Exception as e:
-                log_message(log_level='Error',
-                            message=f'Errors encountered while exporting source content from Vault',
-                            exception=e,
-                            context=None)
+                    has_failures = True
 
-            if check_file_exists_s3(bucket_name=s3_bucket, file_key=doc_version_id_filepath[5:].split("/", 1)[1]):
+                if check_file_exists_s3(bucket_name=s3_bucket, file_key=doc_version_id_filepath[5:].split("/", 1)[1]):
 
-                job_parameter: Dict[str, str] = {'step': 'extract_docs',
-                                                 'source_filepath': f'{starting_directory}',
-                                                 'extract_type': 'incremental',
-                                                 'doc_version_ids': f'{doc_version_id_filepath}'}
+                    job_parameter: Dict[str, str] = {'step': 'extract_docs',
+                                                     'source_filepath': f'{starting_directory}',
+                                                     'extract_type': 'incremental',
+                                                     'doc_version_ids': f'{doc_version_id_filepath}'}
 
-                start_batch_job(job_name=f'{job_name}-export', job_queue=job_queue,
-                                job_definition=job_definition,
-                                job_parameters=job_parameter)
+                    start_batch_job(job_name=f'{job_name}-export', job_queue=job_queue,
+                                    job_definition=job_definition,
+                                    job_parameters=job_parameter)
+                else:
+                    log_message(log_level='Info',
+                                message=f'All documents exported successfully',
+                                context=None)
             else:
-                log_message(log_level='Info',
-                            message=f'All documents exported successfully',
+                log_message(log_level='Error',
+                            message=f'Document ID file does not exist',
                             context=None)
-        else:
-            log_message(log_level='Info',
-                        message=f'Document ID file does not exist',
+                has_failures = True
+        except Exception as e:
+            log_message(log_level='Error',
+                        message=f'Errors encountered while exporting source content from Vault',
+                        exception=e,
                         context=None)
-    log_message(log_level='Info',
-                message=f'AWS Batch job finished successfully',
-                context=None)
+            has_failures = True
+
+    if has_failures:
+        log_message(log_level='Error',
+                    message=f'Errors encountered during task execution',
+                    context=None)
+        sys.exit(1)
+    else:
+        log_message(log_level='Info',
+                    message=f'AWS Batch job finished successfully',
+                    context=None)
+        sys.exit(0)
 
 
 if __name__ == '__main__':
