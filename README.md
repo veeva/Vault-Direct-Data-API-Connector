@@ -1,4 +1,4 @@
-# Vault-Direct-Data-API-Connector
+# Direct Data API Connector for Amazon Redshift
 
 
 
@@ -9,10 +9,10 @@
 
 ![Direct Data Connector Diagram](https://github.com/veeva/Vault-Direct-Data-API-Connector/blob/2e30807073334e9da71cf4331263935c09ad86af/Direct%20Data%20API%20Connector.png)
 
-This project is a custom connector between Vault and AWS Redshift. This connector performs the following:
+This project is a custom connector between Vault and Amazon Redshift. This connector performs the following:
 1. List and download Direct Data files from Vault using Direct Data API
 2. Place Direct Data files to an S3 bucket
-3. Load Direct Data into an AWS Redshift database
+3. Load Direct Data into an Amazon Redshift database
 
 
 ## Setup
